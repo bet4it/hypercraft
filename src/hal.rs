@@ -45,6 +45,11 @@ pub trait HyperCraftHal: Sized {
 }
 
 #[cfg(target_arch = "x86_64")]
+/// Hypercall arguments.
+pub type HypercallArgs = [u32; 5];
+
+
+#[cfg(target_arch = "x86_64")]
 /// Virtual devices of a [`VCpu`].
 pub trait PerCpuDevices<H: HyperCraftHal>: Sized {
     /// Creates a new [`PerCpuDevices`].
@@ -52,7 +57,7 @@ pub trait PerCpuDevices<H: HyperCraftHal>: Sized {
     /// Handles vm-exits.
     fn vmexit_handler(&mut self, vcpu: &mut VCpu<H>, exit_info: &VmExitInfo) -> Option<HyperResult>;
     /// Handles hypercall.
-    fn hypercall_handler(&mut self, vcpu: &mut VCpu<H>, id: u32, args: (u32, u32)) -> HyperResult<u32>;
+    fn hypercall_handler(&mut self, vcpu: &mut VCpu<H>, id: u32, args: HypercallArgs) -> HyperResult<u32>;
     /// Checks whether there are some new events and injects them.
     fn check_events(&mut self, vcpu: &mut VCpu<H>) -> HyperResult;
 }

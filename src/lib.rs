@@ -52,7 +52,7 @@ pub use arch::{
 
 pub use hal::HyperCraftHal;
 #[cfg(target_arch = "x86_64")]
-pub use hal::{PerCpuDevices, PerVmDevices};
+pub use hal::{PerCpuDevices, PerVmDevices, HypercallArgs};
 pub use memory::{
     GuestPageNum, GuestPageTableTrait, GuestPhysAddr, GuestVirtAddr, HostPageNum, HostPhysAddr,
     HostVirtAddr,
