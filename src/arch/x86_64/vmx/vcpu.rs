@@ -9,7 +9,7 @@ use x86::bits64::vmx;
 use x86::controlregs::{xcr0 as xcr0_read, xcr0_write, Xcr0};
 use x86::dtables::{self, DescriptorTablePointer};
 use x86::segmentation::SegmentSelector;
-use x86_64::registers::control::{Cr0, Cr0Flags, Cr3, Cr4, Cr4Flags};
+use x86_64::registers::control::{Cr0, Cr0Flags, Cr3, Cr4, Cr4Flags, EferFlags};
 
 use super::definitions::VmxExitReason;
 use super::region::{IOBitmap, MsrBitmap, VmxRegion};
@@ -22,8 +22,12 @@ use super::vmcs::{
 #[cfg(feature = "type1_5")]
 use super::LinuxContext;
 use super::VmxPerCpuState;
-use crate::arch::{memory::NestedPageFaultInfo, msr::Msr, regs::GeneralRegisters};
-use crate::{GuestPhysAddr, HostPhysAddr, HyperCraftHal, HyperError, HyperResult, VmxExitInfo};
+use crate::arch::{
+    ept::GuestPageWalkInfo, memory::NestedPageFaultInfo, msr::Msr, regs::GeneralRegisters,
+};
+use crate::{
+    GuestPhysAddr, GuestVirtAddr, HostPhysAddr, HyperCraftHal, HyperError, HyperResult, VmxExitInfo,
+};
 
 pub struct XState {
     host_xcr0: u64,
@@ -548,6 +552,27 @@ impl<H: HyperCraftHal> VmxVcpu<H> {
         VmcsControl64::IO_BITMAP_B_ADDR.write(self.io_bitmap.phys_addr().1 as _)?;
         VmcsControl64::MSR_BITMAPS_ADDR.write(self.msr_bitmap.phys_addr() as _)?;
         Ok(())
+    }
+
+    fn get_paging_level(&self) -> usize {
+        let mut level: u32 = 0; // non-paging
+        let cr0 = VmcsGuestNW::CR0.read().unwrap();
+        let cr4 = VmcsGuestNW::CR4.read().unwrap();
+        let efer = VmcsGuest64::IA32_EFER.read().unwrap();
+        // paging is enabled
+        if cr0 & Cr0Flags::PAGING.bits() as usize != 0 {
+            if cr4 & Cr4Flags::PHYSICAL_ADDRESS_EXTENSION.bits() as usize != 0 {
+                // is long mode
+                if efer & EferFlags::LONG_MODE_ACTIVE.bits() != 0 {
+                    level = 4;
+                } else {
+                    level = 3;
+                }
+            } else {
+                level = 2;
+            }
+        }
+        level as usize
     }
 }
 
