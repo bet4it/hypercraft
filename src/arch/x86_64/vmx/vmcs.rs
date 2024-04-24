@@ -1,15 +1,18 @@
 use bit_field::BitField;
 use bitflags::bitflags;
 use core::arch::asm;
-use x86::bits64::{rflags::{self, RFlags}, vmx};
-use x86::vmx::{Result, VmFail};
 use page_table_entry::MappingFlags;
+use x86::bits64::{
+    rflags::{self, RFlags},
+    vmx,
+};
+use x86::vmx::{Result, VmFail};
 
 use super::definitions::{VmxExitReason, VmxInstructionError, VmxInterruptionType};
-use crate::{HostPhysAddr, HyperError, HyperResult};
 use crate::arch::memory::NestedPageFaultInfo;
 use crate::arch::msr::Msr;
 use crate::memory::PAGE_SIZE_4K;
+use crate::{HostPhysAddr, HyperError, HyperResult};
 
 macro_rules! vmcs_read {
     ($field_enum: ident, u64) => {
@@ -544,10 +547,34 @@ pub struct VmxIoExitInfo {
 /// Exit Qualification for Control Register Accesses. (SDM Vol. 3C, Section 28.2.1, Table 28-5)
 #[derive(Debug)]
 pub struct CrAccessInfo {
-    /// Number of control register accessed.
+    /// [3:0]
+    /// Number of control register
+    ///     (0 for CLTS and LMSW).
+    /// Bit 3 is always 0 on processors that do not support Intel 64 architecture as they do not support CR8.
     pub cr_number: u8,
-    ///
+    /// [5:4]
+    /// Access type:
+    ///     0 = MOV to CR
+    ///     1 = MOV from CR
+    ///     2 = CLTS
+    ///     3 = LMSW
     pub access_type: u8,
+    /// [6]
+    /// LMSW operand type:
+    ///     0 = register
+    ///     1 = memory
+    /// For CLTS and MOV CR, cleared to 0
+    pub lmsw_op_type: u8,
+    /// [11:8]
+    /// For MOV CR, the general-purpose register:
+    ///     0=RAX 1=RCX 2=RDX 3=RBX 4=RSP 5=RBP 6=RSI 7=RDI
+    ///     8–15 represent R8–R15, respectively (used only on processors that support Intel 64 architecture)
+    /// For CLTS and LMSW, cleared to 0
+    pub gpr: u8,
+    /// [31:16]
+    /// For LMSW, the LMSW source data
+    /// For CLTS and MOV CR, cleared to 0
+    pub lmsw_source_data: u8,
 }
 
 pub mod controls {
@@ -721,11 +748,52 @@ pub fn ept_violation_info() -> HyperResult<NestedPageFaultInfo> {
     })
 }
 
+pub fn update_efer() -> HyperResult {
+    use x86_64::registers::control::EferFlags;
+
+    let efer = VmcsGuest64::IA32_EFER.read()?;
+    let mut guest_efer = EferFlags::from_bits_truncate(efer);
+
+    // if ((efer & (EFER_LME | EFER_LMA)) != EFER_LME)
+    if guest_efer.contains(EferFlags::LONG_MODE_ENABLE)
+        && guest_efer.contains(EferFlags::LONG_MODE_ACTIVE)
+    {
+        debug!("Guest IA32_EFER LONG_MODE_ACTIVE is set, just return");
+        return Ok(());
+    }
+
+    guest_efer.set(EferFlags::LONG_MODE_ACTIVE, true);
+
+    debug!(
+        "Guest IA32_EFER from {:?} update to {:?}",
+        EferFlags::from_bits_truncate(efer),
+        guest_efer
+    );
+
+    VmcsGuest64::IA32_EFER.write(guest_efer.bits())?;
+
+    use controls::EntryControls as EntryCtrl;
+    set_control(
+        VmcsControl32::VMENTRY_CONTROLS,
+        Msr::IA32_VMX_TRUE_ENTRY_CTLS,
+        VmcsControl32::VMENTRY_CONTROLS.read()? as u32,
+        (EntryCtrl::IA32E_MODE_GUEST).bits(),
+        0,
+    )?;
+
+    Ok(())
+}
+
 pub fn cr_access_info() -> HyperResult<CrAccessInfo> {
     let qualification = VmcsReadOnlyNW::EXIT_QUALIFICATION.read()?;
+    debug!("cr_access_info qualification {:#x}", qualification);
+
     Ok(CrAccessInfo {
         cr_number: qualification.get_bits(0..4) as u8,
-        access_type: qualification.get_bits(4..6) as u8, 
+        access_type: qualification.get_bits(4..6) as u8,
+        lmsw_op_type: qualification.get_bits(6..7) as u8,
+        gpr: qualification.get_bits(8..12) as u8,
+        lmsw_source_data: qualification.get_bits(16..32) as u8,
     })
 }
 
