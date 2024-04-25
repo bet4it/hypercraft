@@ -758,17 +758,17 @@ pub fn update_efer() -> HyperResult {
     if guest_efer.contains(EferFlags::LONG_MODE_ENABLE)
         && guest_efer.contains(EferFlags::LONG_MODE_ACTIVE)
     {
-        debug!("Guest IA32_EFER LONG_MODE_ACTIVE is set, just return");
+        // debug!("Guest IA32_EFER LONG_MODE_ACTIVE is set, just return");
         return Ok(());
     }
 
     guest_efer.set(EferFlags::LONG_MODE_ACTIVE, true);
 
-    debug!(
-        "Guest IA32_EFER from {:?} update to {:?}",
-        EferFlags::from_bits_truncate(efer),
-        guest_efer
-    );
+    // debug!(
+    //     "Guest IA32_EFER from {:?} update to {:?}",
+    //     EferFlags::from_bits_truncate(efer),
+    //     guest_efer
+    // );
 
     VmcsGuest64::IA32_EFER.write(guest_efer.bits())?;
 
@@ -786,7 +786,7 @@ pub fn update_efer() -> HyperResult {
 
 pub fn cr_access_info() -> HyperResult<CrAccessInfo> {
     let qualification = VmcsReadOnlyNW::EXIT_QUALIFICATION.read()?;
-    debug!("cr_access_info qualification {:#x}", qualification);
+    // debug!("cr_access_info qualification {:#x}", qualification);
 
     Ok(CrAccessInfo {
         cr_number: qualification.get_bits(0..4) as u8,

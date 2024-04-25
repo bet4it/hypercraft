@@ -97,11 +97,12 @@ impl<H: HyperCraftHal> VmxVcpu<H> {
             vcpu_id,
             launched: false,
             vmcs: VmxRegion::new(vmcs_revision_id, false)?,
-            io_bitmap: IOBitmap::passthrough_all()?,
+            io_bitmap: IOBitmap::intercept_all()?,
             msr_bitmap: MsrBitmap::passthrough_all()?,
             pending_events: VecDeque::with_capacity(8),
             xstate: XState::new(),
         };
+        vcpu.setup_io_bitmap()?;
         vcpu.setup_msr_bitmap()?;
         vcpu.setup_vmcs(entry, ept_root)?;
         info!("[HV] created VmxVcpu(vmcs: {:#x})", vcpu.vmcs.phys_addr());
@@ -241,10 +242,10 @@ impl<H: HyperCraftHal> VmxVcpu<H> {
         } else {
             seg_base = VmcsGuestNW::CS_BASE.read().unwrap();
         }
-        debug!(
-            "seg_base: {:#x}, guest_rip: {:#x} cpu mode:{:?}",
-            seg_base, guest_rip, cpu_mode
-        );
+        // debug!(
+        //     "seg_base: {:#x}, guest_rip: {:#x} cpu mode:{:?}",
+        //     seg_base, guest_rip, cpu_mode
+        // );
         seg_base + guest_rip
     }
 
@@ -279,7 +280,7 @@ impl<H: HyperCraftHal> VmxVcpu<H> {
         GuestPageWalkInfo {
             top_entry,
             level,
-            width: width,
+            width,
             is_user_mode_access,
             is_write_access,
             is_inst_fetch,
@@ -330,6 +331,16 @@ impl<H: HyperCraftHal> VmxVcpu<H> {
 
 // Implementation of private methods
 impl<H: HyperCraftHal> VmxVcpu<H> {
+    fn setup_io_bitmap(&mut self) -> HyperResult {
+        // By default, I/O bitmap is set as `intercept_all`.
+
+        // Only passthrough serial at 0x3f8 now.
+        let com1 = 0x3f8;
+        self.io_bitmap.set_intercept_of_range(com1, 8, false);
+
+        Ok(())
+    }
+
     fn setup_msr_bitmap(&mut self) -> HyperResult {
         // Intercept IA32_APIC_BASE MSR accesses
         let msr = x86::msr::IA32_APIC_BASE;
@@ -926,7 +937,7 @@ impl<H: HyperCraftHal> VmxVcpu<H> {
 
     fn set_cr(&mut self, cr_idx: usize, val: u64) {
         (|| -> HyperResult {
-            debug!("set guest CR{} to val {:#x}", cr_idx, val);
+            // debug!("set guest CR{} to val {:#x}", cr_idx, val);
             match cr_idx {
                 0 => {
                     // Retrieve/validate restrictions on CR0
@@ -1198,10 +1209,7 @@ impl<H: HyperCraftHal> VmxVcpu<H> {
         match exit_info.exit_reason {
             VmxExitReason::INTERRUPT_WINDOW => Some(self.set_interrupt_window(false)),
             VmxExitReason::XSETBV => Some(self.handle_xsetbv()),
-            VmxExitReason::CR_ACCESS => {
-                debug!("{:#x?}", exit_info);
-                Some(self.handle_cr())
-            }
+            VmxExitReason::CR_ACCESS => Some(self.handle_cr()),
             VmxExitReason::CPUID => Some(self.handle_cpuid()),
             _ => None,
         }

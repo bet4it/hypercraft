@@ -24,6 +24,7 @@ use memory_addr::PhysAddr;
 use page_table::PagingIf;
 #[cfg(feature = "type1_5")]
 pub use vmx::LinuxContext;
+use x86::current;
 use x86_64::registers::debug;
 
 const VM_EXIT_INSTR_LEN_VMCALL: u8 = 3;
@@ -267,16 +268,16 @@ impl<H: HyperCraftHal, PD: PerCpuDevices<H>, VD: PerVmDevices<H>, G: GuestPageTa
         length: u32,
         vcpu: &VCpu<H>,
     ) -> HyperResult<Vec<u8>> {
-        debug!(
-            "get_gva_content_bytes: guest_rip: {:#x}, length: {:#x}",
-            guest_rip, length
-        );
+        // debug!(
+        //     "get_gva_content_bytes: guest_rip: {:#x}, length: {:#x}",
+        //     guest_rip, length
+        // );
         let gva = vcpu.gla2gva(guest_rip);
-        debug!("get_gva_content_bytes: gva: {:#x}", gva);
+        // debug!("get_gva_content_bytes: gva: {:#x}", gva);
         let gpa = Self::gva2gpa(ept.clone(), vcpu, gva)?;
-        debug!("get_gva_content_bytes: gpa: {:#x}", gpa);
+        // debug!("get_gva_content_bytes: gpa: {:#x}", gpa);
         let hva = Self::gpa2hva(ept.clone(), gpa)?;
-        debug!("get_gva_content_bytes: hva: {:#x}", hva);
+        // debug!("get_gva_content_bytes: hva: {:#x}", hva);
         let mut content = Vec::with_capacity(length as usize);
         let code_ptr = hva as *const u8;
         unsafe {
@@ -285,7 +286,7 @@ impl<H: HyperCraftHal, PD: PerCpuDevices<H>, VD: PerVmDevices<H>, G: GuestPageTa
                 content.push(value_ptr.read());
             }
         }
-        debug!("get_gva_content_bytes: content: {:#?}", content);
+        debug!("get_gva_content_bytes: content: {:?}", content);
         Ok(content)
     }
 
@@ -310,40 +311,66 @@ impl<H: HyperCraftHal, PD: PerCpuDevices<H>, VD: PerVmDevices<H>, G: GuestPageTa
         pw_info: GuestPageWalkInfo,
         gva: GuestVirtAddr,
     ) -> HyperResult<GuestPhysAddr> {
-        debug!("page_table_walk: gva: {:#x} pw_info:{:#?}", gva, pw_info);
+        use x86_64::structures::paging::page_table::PageTableFlags as PTF;
+
+        // debug!("page_table_walk: gva: {:#x}\npw_info:{:#x?}", gva, pw_info);
+        const PHYS_ADDR_MASK: usize = 0x000f_ffff_ffff_f000; // bits 12..52
         if pw_info.level <= 1 {
             return Ok(gva as GuestPhysAddr);
         }
         let mut addr = pw_info.top_entry;
         let mut current_level = pw_info.level;
         let mut shift = 0;
+        let mut page_size = PAGE_SIZE;
+
+        let mut entry = 0;
+
         while current_level != 0 {
             current_level -= 1;
             // get page table base addr
-            addr = addr & !(PAGE_ENTRY_CNT - 1);
-            if current_level == 2 {
-                let _a = 0;
-            }
+            addr = addr & PHYS_ADDR_MASK;
+
             let base = Self::gpa2hva(ept.clone(), addr)?;
             shift = (current_level * pw_info.width as usize) + 12;
-            let index = (gva >> shift) & (PAGE_ENTRY_CNT - 1);
+
+            let index = (gva >> shift) & ((1 << (pw_info.width as usize)) - 1);
+            page_size = 1 << shift;
+
             // get page table entry pointer
             let entry_ptr = unsafe { (base as *const usize).offset(index as isize) };
+
             // next page table addr (gpa)
-            addr = unsafe { *entry_ptr };
+            entry = unsafe { *entry_ptr };
+
+            let entry_flags = PTF::from_bits_retain(entry as u64);
+
+            // debug!("next page table entry {:#x} {:?}", entry, entry_flags);
+
+            /* check if the entry present */
+            if !entry_flags.contains(PTF::PRESENT) {
+                warn!(
+                    "GVA {:#x} l{} entry {:#x} not presented in its NPT",
+                    gva,
+                    current_level + 1,
+                    entry
+                );
+                return Err(HyperError::BadState);
+            }
+
+            // Check hugepage
+            if pw_info.pse && current_level > 0 && entry_flags.contains(PTF::HUGE_PAGE) {
+                break;
+            }
+
+            addr = entry;
         }
 
-        let mut entry = addr;
-        // debug!("1 page_table_walk: entry: {:#x} shift:{:#x}", entry, shift);
-        // ?????
         entry >>= shift;
-        // debug!("2 page_table_walk: entry: {:#x} shift:{:#x}", entry, shift);
         /* shift left 12bit more and back to clear XD/Prot Key/Ignored bits */
         entry <<= shift + 12;
-        // debug!("3 page_table_walk: entry: {:#x} shift:{:#x}", entry, shift);
         entry >>= 12;
-        // debug!("4 page_table_walk: entry: {:#x} shift:{:#x}", entry, shift);
-        Ok((entry | (gva & (PAGE_SIZE - 1))) as GuestPhysAddr)
+
+        Ok((entry | (gva & (page_size - 1))) as GuestPhysAddr)
     }
 }
 

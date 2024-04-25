@@ -93,6 +93,12 @@ impl<H: HyperCraftHal> IOBitmap<H> {
             bitmap[byte] &= !(1 << bits);
         }
     }
+
+    pub fn set_intercept_of_range(&mut self, port_base: u32, count: u32, intercept: bool) {
+        for port in port_base..port_base + count {
+            self.set_intercept(port, intercept)
+        }
+    }
 }
 
 #[derive(Debug)]
