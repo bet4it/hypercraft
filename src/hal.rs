@@ -112,7 +112,7 @@ pub trait MmioOps: Send + Sync {
     /// Read operation
     fn read(&mut self, addr: u64, access_size: u8) -> HyperResult<u64>;
     /// Write operation
-    fn write(&mut self, addr: u64, access_size: u8, value: u32) -> HyperResult;
+    fn write(&mut self, addr: u64, access_size: u8, value: u64) -> HyperResult;
 }
 
 /// Read data from Region to argument `data`,
