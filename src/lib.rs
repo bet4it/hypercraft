@@ -109,6 +109,10 @@ pub enum HyperError {
     PciError(PciError),
     /// Virtio Error
     VirtioError(VirtioError),
+    /// Operand Not Supported
+    OperandNotSupported,
+    /// Instruction Not Supported
+    InstructionNotSupported,
 }
 
 /// The result type for hypervisor operation.
