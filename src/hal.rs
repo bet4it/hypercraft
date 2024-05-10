@@ -122,7 +122,7 @@ pub trait MmioOps: Send + Sync {
 ///
 /// * `offset` - Base address offset.
 /// * `access_size` - Access size.
-type ReadFn = alloc::sync::Arc<dyn Fn(u64, u8) -> HyperResult<u32> + Send + Sync>;
+type ReadFn = alloc::sync::Arc<dyn Fn(u64, u8) -> HyperResult<u64> + Send + Sync>;
 
 /// Write `data` to memory,
 /// return `true` if write successfully, or return `false`.

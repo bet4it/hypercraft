@@ -113,6 +113,8 @@ pub enum HyperError {
     OperandNotSupported,
     /// Instruction Not Supported
     InstructionNotSupported,
+    /// Invalid Bar Address
+    InvalidBarAddress,
 }
 
 /// The result type for hypervisor operation.

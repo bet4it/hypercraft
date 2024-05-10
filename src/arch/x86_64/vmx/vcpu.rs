@@ -1012,13 +1012,15 @@ impl<H: HyperCraftHal> VmxVcpu<H> {
         ept_root: HostPhysAddr,
     ) -> HyperResult<Self> {
         XState::enable_xsave();
+        let mut io_bitmap = IOBitmap::passthrough_all()?;
+        io_bitmap.set_intercept_of_range(0xcf8, 8, true);
         let mut vcpu = Self {
             guest_regs: GeneralRegisters::default(),
             host_stack_top: 0,
             vcpu_id,
             launched: false,
             vmcs: VmxRegion::new(vmcs_revision_id, false)?,
-            io_bitmap: IOBitmap::passthrough_all()?,
+            io_bitmap,
             msr_bitmap: MsrBitmap::passthrough_all()?,
             pending_events: VecDeque::with_capacity(8),
             xstate: XState::new(),
