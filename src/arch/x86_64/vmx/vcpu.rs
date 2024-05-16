@@ -1383,12 +1383,10 @@ impl<H: HyperCraftHal> VmxVcpu<H> {
             LEAF_STRUCTURED_EXTENDED_FEATURE_FLAGS_ENUMERATION => {
                 let mut res = cpuid!(regs_clone.rax, regs_clone.rcx);
                 if regs_clone.rcx == 0 {
-                    debug!("handle_cpuid: Initial EAX Value {:#x} return ecx {:#x}", function, res.ecx);
                     // Bit 05: WAITPKG.
                     res.ecx.set_bit(5, false); // clear waitpkg
                     // Bit 16: LA57. Supports 57-bit linear addresses and five-level paging if 1.
                     res.ecx.set_bit(16, false); // clear LA57
-                    debug!("handle_cpuid: Initial EAX Value {:#x} return modified to ecx {:#x}", function, res.ecx);
                 }
 
                 res
