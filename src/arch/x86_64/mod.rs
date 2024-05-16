@@ -363,7 +363,9 @@ impl<H: HyperCraftHal, PD: PerCpuDevices<H>, VD: PerVmDevices<H>, G: GuestPageTa
             for i in 0..ENTRY_COUNT {
                 let _entry_ptr = unsafe { (base as *const usize).offset(i as isize) };
                 let entry_value = unsafe { *_entry_ptr };
-                debug!("[{i}] ptr {_entry_ptr:#p} {entry_value:#x}");
+                if entry_value != 0 {
+                    debug!("[{i}] ptr {_entry_ptr:#p} {entry_value:#x}");
+                }
             }
 
             // get page table entry pointer
