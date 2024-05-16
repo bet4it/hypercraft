@@ -122,22 +122,29 @@ impl<H: HyperCraftHal, PD: PerCpuDevices<H>, VD: PerVmDevices<H>, G: GuestPageTa
                     let result = vcpu_device.vmexit_handler(vcpu, &exit_info).or_else(|| {
                         let guest_rip = exit_info.guest_rip;
                         let length = exit_info.exit_instruction_length;
-                        let instr = Self::decode_instr(self.ept.clone(), vcpu, guest_rip, length)
-                            .expect("decode instruction failed");
-                        self.device.vmexit_handler(vcpu, &exit_info, Some(instr))
+                        match Self::decode_instr(self.ept.clone(), vcpu, guest_rip, length) {
+                            Ok(instr) => self.device.vmexit_handler(vcpu, &exit_info, Some(instr)),
+                            Err(e) => Some(Err(e)),
+                        }
                     });
 
                     match result {
-                        Some(result) => {
-                            if result.is_err() {
-                                panic!(
-                                    "VM failed to handle a vm-exit: {:?}, error {:?}, vcpu: {:#x?}",
-                                    exit_info.exit_reason,
-                                    result.unwrap_err(),
-                                    vcpu
-                                );
-                            }
-                        }
+                        Some(result) => match result {
+                            Ok(()) => {}
+                            Err(ref e) => match e {
+                                HyperError::PageFault => {
+                                    vcpu.inject_page_fault(exit_info.guest_rip)
+                                }
+                                _ => {
+                                    panic!(
+											"VM failed to handle a vm-exit: {:?}, error {:?}, vcpu: {:#x?}",
+												exit_info.exit_reason,
+												result.unwrap_err(),
+												vcpu
+											);
+                                }
+                            },
+                        },
                         None => {
                             panic!(
                                 "nobody wants to handle this vm-exit: {:?}, vcpu: {:#x?}",
@@ -257,7 +264,7 @@ impl<H: HyperCraftHal, PD: PerCpuDevices<H>, VD: PerVmDevices<H>, G: GuestPageTa
         let mut output = String::new();
         let mut formatter = MasmFormatter::new();
         formatter.format(&instr, &mut output);
-        // debug!("Instruction: {}", output);
+        debug!("Instruction: {}", output);
         Ok(instr)
     }
 
@@ -268,10 +275,10 @@ impl<H: HyperCraftHal, PD: PerCpuDevices<H>, VD: PerVmDevices<H>, G: GuestPageTa
         length: u32,
         vcpu: &VCpu<H>,
     ) -> HyperResult<Vec<u8>> {
-        // debug!(
-        //     "get_gva_content_bytes: guest_rip: {:#x}, length: {:#x}",
-        //     guest_rip, length
-        // );
+        debug!(
+            "get_gva_content_bytes: guest_rip: {:#x}, length: {:#x}",
+            guest_rip, length
+        );
         let gva = vcpu.gla2gva(guest_rip);
         // debug!("get_gva_content_bytes: gva: {:#x}", gva);
         let gpa = Self::gva2gpa(ept.clone(), vcpu, gva)?;
@@ -293,6 +300,7 @@ impl<H: HyperCraftHal, PD: PerCpuDevices<H>, VD: PerVmDevices<H>, G: GuestPageTa
     fn gpa2hva(ept: Arc<G>, gpa: GuestPhysAddr) -> HyperResult<HostVirtAddr> {
         let hpa = Self::gpa2hpa(ept, gpa)?;
         let hva = H::phys_to_virt(hpa);
+        debug!("gpa2hva hpa {hpa:#x} hva {hva:#x}");
         Ok(hva as HostVirtAddr)
     }
 
@@ -312,8 +320,15 @@ impl<H: HyperCraftHal, PD: PerCpuDevices<H>, VD: PerVmDevices<H>, G: GuestPageTa
         gva: GuestVirtAddr,
     ) -> HyperResult<GuestPhysAddr> {
         use x86_64::structures::paging::page_table::PageTableFlags as PTF;
+        const ENTRY_COUNT: usize = 512;
 
-        // debug!("page_table_walk: gva: {:#x}\npw_info:{:#x?}", gva, pw_info);
+        debug!("page_table_walk: gva: {:#x}\npw_info:{:#x?}", gva, pw_info);
+
+        debug!("l4 {}", (gva >> (12 + 27)) & (ENTRY_COUNT - 1));
+        debug!("l3 {}", (gva >> (12 + 18)) & (ENTRY_COUNT - 1));
+        debug!("l2 {}", (gva >> (12 + 9)) & (ENTRY_COUNT - 1));
+        debug!("l1 {}", (gva >> 12) & (ENTRY_COUNT - 1));
+
         const PHYS_ADDR_MASK: usize = 0x000f_ffff_ffff_f000; // bits 12..52
         if pw_info.level <= 1 {
             return Ok(gva as GuestPhysAddr);
@@ -327,6 +342,8 @@ impl<H: HyperCraftHal, PD: PerCpuDevices<H>, VD: PerVmDevices<H>, G: GuestPageTa
 
         while current_level != 0 {
             current_level -= 1;
+            debug!("gpa {:#x} l{}", addr, current_level + 1);
+
             // get page table base addr
             addr = addr & PHYS_ADDR_MASK;
 
@@ -336,6 +353,19 @@ impl<H: HyperCraftHal, PD: PerCpuDevices<H>, VD: PerVmDevices<H>, G: GuestPageTa
             let index = (gva >> shift) & ((1 << (pw_info.width as usize)) - 1);
             page_size = 1 << shift;
 
+            debug!(
+                "entry gpa {:#x} base hva {:#x} shift {} index {}",
+                addr, base, shift, index
+            );
+
+            unsafe { x86::tlb::flush_all() }
+
+            for i in 0..ENTRY_COUNT {
+                let _entry_ptr = unsafe { (base as *const usize).offset(i as isize) };
+                let entry_value = unsafe { *_entry_ptr };
+                debug!("[{i}] ptr {_entry_ptr:#p} {entry_value:#x}");
+            }
+
             // get page table entry pointer
             let entry_ptr = unsafe { (base as *const usize).offset(index as isize) };
 
@@ -344,7 +374,7 @@ impl<H: HyperCraftHal, PD: PerCpuDevices<H>, VD: PerVmDevices<H>, G: GuestPageTa
 
             let entry_flags = PTF::from_bits_retain(entry as u64);
 
-            // debug!("next page table entry {:#x} {:?}", entry, entry_flags);
+            debug!("next page table entry {:#x} {:?}", entry, entry_flags);
 
             /* check if the entry present */
             if !entry_flags.contains(PTF::PRESENT) {
@@ -354,7 +384,8 @@ impl<H: HyperCraftHal, PD: PerCpuDevices<H>, VD: PerVmDevices<H>, G: GuestPageTa
                     current_level + 1,
                     entry
                 );
-                return Err(HyperError::BadState);
+
+                return Err(HyperError::PageFault);
             }
 
             // Check hugepage

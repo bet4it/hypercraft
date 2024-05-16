@@ -248,10 +248,10 @@ impl<H: HyperCraftHal> VmxVcpu<H> {
         } else {
             seg_base = VmcsGuestNW::CS_BASE.read().unwrap();
         }
-        // debug!(
-        //     "seg_base: {:#x}, guest_rip: {:#x} cpu mode:{:?}",
-        //     seg_base, guest_rip, cpu_mode
-        // );
+        debug!(
+            "seg_base: {:#x}, guest_rip: {:#x} cpu mode:{:?}",
+            seg_base, guest_rip, cpu_mode
+        );
         seg_base + guest_rip
     }
 
@@ -317,6 +317,16 @@ impl<H: HyperCraftHal> VmxVcpu<H> {
     /// and try to inject it before later VM entries.
     pub fn queue_event(&mut self, vector: u8, err_code: Option<u32>) {
         self.pending_events.push_back((vector, err_code));
+    }
+
+	/// Add a Page Fault exception to the pending events list.
+    pub fn inject_page_fault(&mut self, fault_addr: usize) {
+        const IDT_PF: u8 = 14; /* #PF: Page Fault */
+        const PAGE_FAULT_ID_FLAG: u32 = 0x00000010;
+        const PAGE_FAULT_P_FLAG: u32 = 0x00000001;
+        debug!("page fault happened on {:#x}", fault_addr);
+        self.set_cr(2, fault_addr as u64);
+        self.queue_event(IDT_PF, Some(PAGE_FAULT_ID_FLAG | PAGE_FAULT_P_FLAG))
     }
 
     /// If enable, a VM exit occurs at the beginning of any instruction if
@@ -971,6 +981,7 @@ impl<H: HyperCraftHal> VmxVcpu<H> {
                     VmcsControlNW::CR0_READ_SHADOW.write(val as _)?;
                     VmcsControlNW::CR0_GUEST_HOST_MASK.write((must1 | !must0) as _)?;
                 }
+                2 => unsafe { x86::controlregs::cr2_write(val) },
                 3 => VmcsGuestNW::CR3.write(val as _)?,
                 4 => {
                     // Retrieve/validate restrictions on CR4
@@ -1197,11 +1208,11 @@ impl<H: HyperCraftHal> VmxVcpu<H> {
     /// Try to inject a pending event before next VM entry.
     fn inject_pending_events(&mut self) -> HyperResult {
         if let Some(event) = self.pending_events.front() {
-            // debug!(
-            //     "inject_pending_events vector {:#x} allow_int {}",
-            //     event.0,
-            //     self.allow_interrupt()
-            // );
+            debug!(
+                "inject_pending_events vector {:#x} allow_int {}",
+                event.0,
+                self.allow_interrupt()
+            );
             if event.0 < 32 || self.allow_interrupt() {
                 // if it's an exception, or an interrupt that is not blocked, inject it directly.
                 vmcs::inject_event(event.0, event.1)?;
