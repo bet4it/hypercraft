@@ -1379,10 +1379,16 @@ impl<H: HyperCraftHal> VmxVcpu<H> {
                 res.ecx |= FEATURE_HYPERVISOR;
                 res
             }
+            // See SDM Table 3-8. Information Returned by CPUID Instruction (Contd.)
             LEAF_STRUCTURED_EXTENDED_FEATURE_FLAGS_ENUMERATION => {
                 let mut res = cpuid!(regs_clone.rax, regs_clone.rcx);
                 if regs_clone.rcx == 0 {
-                    res.ecx.set_bit(0x5, false); // clear waitpkg
+                    debug!("handle_cpuid: Initial EAX Value {:#x} return ecx {:#x}", function, res.ecx);
+                    // Bit 05: WAITPKG.
+                    res.ecx.set_bit(5, false); // clear waitpkg
+                    // Bit 16: LA57. Supports 57-bit linear addresses and five-level paging if 1.
+                    res.ecx.set_bit(16, false); // clear LA57
+                    debug!("handle_cpuid: Initial EAX Value {:#x} return modified to ecx {:#x}", function, res.ecx);
                 }
 
                 res
