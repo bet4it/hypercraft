@@ -197,7 +197,7 @@ pub enum VirtioError {
     /// Queue descriptor invalid error.
     QueueDescInvalid,
     /// Address overflow error.
-    AddressOverflow(&'static str, u64, u64),
+    AddressOverflow(&'static str, usize, usize),
     /// Device config space overflow error.
     DevConfigOverflow(u64, u64, u64),
     /// Ioctl error.
@@ -217,7 +217,7 @@ pub enum VirtioError {
     /// Failed to write config error.
     FailedToWriteConfig,
     /// Read object error.
-    ReadObjectErr(&'static str, u64),
+    ReadObjectErr(&'static str, usize),
     /// Device status error.
     DevStatErr(u32),
     /// Mmio register error.
