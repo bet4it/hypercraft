@@ -604,9 +604,12 @@ pub fn set_control(
     let allowed0 = cap as u32;
     let allowed1 = (cap >> 32) as u32;
     assert_eq!(allowed0 & allowed1, allowed0);
-    debug!(
+    trace!(
         "set {:?}: {:#x} (+{:#x}, -{:#x})",
-        control, old_value, set, clear
+        control,
+        old_value,
+        set,
+        clear
     );
     if (set & clear) != 0 {
         return Err(HyperError::InvalidParam);
@@ -682,6 +685,10 @@ pub fn exit_info() -> HyperResult<VmxExitInfo> {
     })
 }
 
+pub fn raw_interrupt_exit_info() -> HyperResult<u32> {
+    Ok(VmcsReadOnly32::VMEXIT_INTERRUPTION_INFO.read()?)
+}
+
 pub fn interrupt_exit_info() -> HyperResult<VmxInterruptInfo> {
     // SDM Vol. 3C, Section 24.9.2
     let info = VmcsReadOnly32::VMEXIT_INTERRUPTION_INFO.read()?;
@@ -754,7 +761,6 @@ pub fn update_efer() -> HyperResult {
     let efer = VmcsGuest64::IA32_EFER.read()?;
     let mut guest_efer = EferFlags::from_bits_truncate(efer);
 
-    // if ((efer & (EFER_LME | EFER_LMA)) != EFER_LME)
     if guest_efer.contains(EferFlags::LONG_MODE_ENABLE)
         && guest_efer.contains(EferFlags::LONG_MODE_ACTIVE)
     {

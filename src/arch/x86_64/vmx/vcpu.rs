@@ -204,6 +204,11 @@ impl<H: HyperCraftHal> VmxVcpu<H> {
         vmcs::exit_info()
     }
 
+    /// Raw information for VM Exits Due to Vectored Events, See SDM 25.9.2
+    pub fn raw_interrupt_exit_info(&self) -> HyperResult<u32> {
+        vmcs::raw_interrupt_exit_info()
+    }
+
     /// Information for VM exits due to external interrupts.
     pub fn interrupt_exit_info(&self) -> HyperResult<vmcs::VmxInterruptInfo> {
         vmcs::interrupt_exit_info()
@@ -1269,13 +1274,10 @@ impl<H: HyperCraftHal> VmxVcpu<H> {
                     self.guest_regs.get_reg_of_index(reg)
                 };
                 if cr == 0 || cr == 4 {
-                    // vcpu_skip_emulated_instruction(X86_INST_LEN_MOV_TO_CR);
                     self.advance_rip(VM_EXIT_INSTR_LEN_MV_TO_CR)?;
                     /* TODO: check for #GP reasons */
-                    // vmx_set_guest_cr(cr ? CR4_IDX : CR0_IDX, val);
                     self.set_cr(cr as usize, val);
 
-                    // if (cr == 0 && val & X86_CR0_PG)
                     if cr == 0 && Cr0Flags::from_bits_truncate(val).contains(Cr0Flags::PAGING) {
                         vmcs::update_efer()?;
                     }
@@ -1374,9 +1376,11 @@ impl<H: HyperCraftHal> VmxVcpu<H> {
             LEAF_FEATURE_INFO => {
                 const FEATURE_VMX: u32 = 1 << 5;
                 const FEATURE_HYPERVISOR: u32 = 1 << 31;
+                const FEATURE_MCE: u32 = 1 << 7;
                 let mut res = cpuid!(regs_clone.rax, regs_clone.rcx);
                 res.ecx &= !FEATURE_VMX;
                 res.ecx |= FEATURE_HYPERVISOR;
+                res.eax &= !FEATURE_MCE;
                 res
             }
             // See SDM Table 3-8. Information Returned by CPUID Instruction (Contd.)

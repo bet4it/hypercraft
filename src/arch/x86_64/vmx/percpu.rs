@@ -154,19 +154,19 @@ impl<H: HyperCraftHal> VmxPerCpuState<H> {
         self.vmcs_revision_id = vmx_basic.revision_id;
         self.vmx_region = VmxRegion::new(vmx_basic.revision_id, false)?;
         let mut cr4 = HOST_CR4 | Cr4Flags::VIRTUAL_MACHINE_EXTENSIONS;
-        debug!("this is cr4 flags before set osxsave:{:?}", cr4);
+        // debug!("this is cr4 flags before set osxsave:{:?}", cr4);
         if let Some(features) = CpuId::new().get_feature_info() {
             if features.has_xsave() {
                 cr4 |= Cr4Flags::OSXSAVE;
             }
         } 
-        debug!("this is cr4 flags after set osxsave:{:?}", cr4);
+        // debug!("this is cr4 flags after set osxsave:{:?}", cr4);
         unsafe {
             Cr0::write(HOST_CR0);
             Cr4::write(cr4);
         }
         // Execute VMXON.
-        debug!("this is vmxon_region virt_addr:{:#x} phy_addr:{:#x}", self.vmx_region.virt_addr() as usize, self.vmx_region.phys_addr() as usize);
+        // debug!("this is vmxon_region virt_addr:{:#x} phy_addr:{:#x}", self.vmx_region.virt_addr() as usize, self.vmx_region.phys_addr() as usize);
         unsafe { vmx::vmxon(self.vmx_region.phys_addr() as _)? };
         info!("successed to turn on VMX.");
         Ok(())
