@@ -43,7 +43,7 @@ pub use ept::GuestPageWalkInfo;
 pub use percpu::PerCpu;
 /// VCpu define.
 pub use vmx::VmxVcpu as VCpu;
-pub use vmx::{VmxExitInfo, VmxExitReason};
+pub use vmx::{VmxExitInfo, VmxExitReason, VmxInterruptionType};
 
 // pub use device::{Devices, PortIoDevice};
 

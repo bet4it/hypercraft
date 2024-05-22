@@ -13,6 +13,7 @@ pub use detect::has_hardware_support;
 pub use percpu::VmxPerCpuState;
 pub use vcpu::VmxVcpu;
 pub use definitions::VmxExitReason;
+pub use definitions::VmxInterruptionType;
 pub use vmcs::VmxExitInfo;
 #[cfg(feature = "type1_5")]
 pub use linux_context::LinuxContext;
