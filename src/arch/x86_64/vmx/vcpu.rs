@@ -570,7 +570,7 @@ impl<H: HyperCraftHal> VmxVcpu<H> {
         vmcs::set_control(
             VmcsControl32::SECONDARY_PROCBASED_EXEC_CONTROLS,
             Msr::IA32_VMX_PROCBASED_CTLS2,
-            0,
+            Msr::IA32_VMX_PROCBASED_CTLS2.read() as u32,
             (CpuCtrl2::ENABLE_EPT
                 | CpuCtrl2::ENABLE_RDTSCP
                 | CpuCtrl2::ENABLE_INVPCID

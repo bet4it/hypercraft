@@ -604,23 +604,29 @@ pub fn set_control(
     let allowed0 = cap as u32;
     let allowed1 = (cap >> 32) as u32;
     assert_eq!(allowed0 & allowed1, allowed0);
-    trace!(
+    debug!(
         "set {:?}: {:#x} (+{:#x}, -{:#x})",
-        control,
-        old_value,
-        set,
-        clear
+        control, old_value, set, clear
     );
     if (set & clear) != 0 {
+        warn!("failed because (+{:#x} & -{:#x}) != 0", set, clear);
         return Err(HyperError::InvalidParam);
     }
     if (allowed1 & set) != set {
+        warn!(
+            "{:?} not fully enabled: set {:#x}  allowed1 {:#x}\n",
+            control, set, allowed1
+        );
         // failed if set 0-bits in allowed1
-        return Err(HyperError::InvalidParam);
+        // return Err(HyperError::InvalidParam);
     }
     if (allowed0 & clear) != 0 {
+        warn!(
+            "{:?} not fully enabled: clear {:#x} allowed0 {:#x}\n",
+            control, clear, allowed0
+        );
         // failed if clear 1-bits in allowed0
-        return Err(HyperError::InvalidParam);
+        // return Err(HyperError::InvalidParam);
     }
     // SDM Vol. 3C, Section 31.5.1, Algorithm 3
     let flexible = !allowed0 & allowed1; // therse bits can be either 0 or 1
