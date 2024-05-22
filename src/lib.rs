@@ -101,6 +101,8 @@ pub enum HyperError {
     #[cfg(target_arch = "x86_64")]
     /// Invalid PIO write.
     InValidPioWrite,
+    /// Invalid Mmio
+    InValidMmio,
     /// Invalid Mmio read
     InValidMmioRead,
     /// Invalid Mmio write
