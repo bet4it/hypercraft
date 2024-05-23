@@ -567,16 +567,28 @@ impl<H: HyperCraftHal> VmxVcpu<H> {
 
         // Enable EPT, RDTSCP, INVPCID, and unrestricted guest.
         use SecondaryControls as CpuCtrl2;
+        let mut val = CpuCtrl2::ENABLE_EPT | CpuCtrl2::UNRESTRICTED_GUEST;
+        let raw_cpuid = CpuId::new();
+        if let Some(features) = raw_cpuid.get_extended_processor_and_feature_identifiers() {
+            if features.has_rdtscp() {
+                val |= CpuCtrl2::ENABLE_RDTSCP;
+            }
+        }
+        if let Some(features) = raw_cpuid.get_extended_feature_info() {
+            if features.has_invpcid() {
+                val |= CpuCtrl2::ENABLE_INVPCID;
+            }
+        }
+        if let Some(features) = raw_cpuid.get_extended_state_info() {
+            if features.has_xsaves_xrstors() {
+                val |= CpuCtrl2::ENABLE_XSAVES_XRSTORS;
+            }
+        }
         vmcs::set_control(
             VmcsControl32::SECONDARY_PROCBASED_EXEC_CONTROLS,
             Msr::IA32_VMX_PROCBASED_CTLS2,
             Msr::IA32_VMX_PROCBASED_CTLS2.read() as u32,
-            (CpuCtrl2::ENABLE_EPT
-                | CpuCtrl2::ENABLE_RDTSCP
-                | CpuCtrl2::ENABLE_INVPCID
-                | CpuCtrl2::UNRESTRICTED_GUEST
-                | CpuCtrl2::ENABLE_XSAVES_XRSTORS)
-                .bits(),
+            val.bits(),
             0,
         )?;
 
@@ -1389,7 +1401,7 @@ impl<H: HyperCraftHal> VmxVcpu<H> {
                 if regs_clone.rcx == 0 {
                     // Bit 05: WAITPKG.
                     res.ecx.set_bit(5, false); // clear waitpkg
-                    // Bit 16: LA57. Supports 57-bit linear addresses and five-level paging if 1.
+                                               // Bit 16: LA57. Supports 57-bit linear addresses and five-level paging if 1.
                     res.ecx.set_bit(16, false); // clear LA57
                 }
 
