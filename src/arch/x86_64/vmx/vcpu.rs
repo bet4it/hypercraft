@@ -182,11 +182,6 @@ impl<H: HyperCraftHal> VmxVcpu<H> {
         let exit_info = self.exit_info().unwrap();
         trace!("VM exit: {:#x?}", exit_info);
 
-        let cr4 = VmcsGuestNW::CR4.read().unwrap();
-        if cr4.get_bit(18) {
-            // panic!("osxsave dead!");
-        }
-
         match self.builtin_vmexit_handler(&exit_info) {
             Some(result) => {
                 if result.is_err() {
@@ -425,7 +420,7 @@ impl<H: HyperCraftHal> VmxVcpu<H> {
         self.bind_to_current_processor()?;
         self.setup_vmcs_host()?;
         self.setup_vmcs_guest(entry)?;
-        self.setup_vmcs_control(ept_root)?;
+        self.setup_vmcs_control(ept_root, true)?;
         self.unbind_from_current_processor()?;
         Ok(())
     }
@@ -472,20 +467,6 @@ impl<H: HyperCraftHal> VmxVcpu<H> {
             Cr0Flags::NOT_WRITE_THROUGH | Cr0Flags::CACHE_DISABLE | Cr0Flags::EXTENSION_TYPE;
         self.set_cr(0, cr0_val.bits());
         self.set_cr(4, 0);
-
-        // let cr0_guest = Cr0Flags::EXTENSION_TYPE | Cr0Flags::NUMERIC_ERROR;
-        // let cr0_host_owned = Cr0Flags::NUMERIC_ERROR; // | Cr0Flags::NOT_WRITE_THROUGH | Cr0Flags::CACHE_DISABLE;
-        // let cr0_read_shadow = Cr0Flags::NUMERIC_ERROR;
-        // VmcsGuestNW::CR0.write(cr0_guest.bits() as _)?;
-        // VmcsControlNW::CR0_GUEST_HOST_MASK.write(cr0_host_owned.bits() as _)?;
-        // VmcsControlNW::CR0_READ_SHADOW.write(cr0_read_shadow.bits() as _)?;
-
-        // let cr4_guest = Cr4Flags::VIRTUAL_MACHINE_EXTENSIONS;
-        // let cr4_host_owned = Cr4Flags::VIRTUAL_MACHINE_EXTENSIONS;
-        // let cr4_read_shadow = 0;
-        // VmcsGuestNW::CR4.write(cr4_guest.bits() as _)?;
-        // VmcsControlNW::CR4_GUEST_HOST_MASK.write(cr4_host_owned.bits() as _)?;
-        // VmcsControlNW::CR4_READ_SHADOW.write(cr4_read_shadow)?;
 
         macro_rules! set_guest_segment {
             ($seg: ident, $access_rights: expr) => {{
@@ -535,10 +516,12 @@ impl<H: HyperCraftHal> VmxVcpu<H> {
         Ok(())
     }
 
-    fn setup_vmcs_control(&mut self, ept_root: HostPhysAddr) -> HyperResult {
+    fn setup_vmcs_control(&mut self, ept_root: HostPhysAddr, is_guest: bool) -> HyperResult {
         // Intercept NMI and external interrupts.
         use super::vmcs::controls::*;
         use PinbasedControls as PinCtrl;
+        let raw_cpuid = CpuId::new();
+
         vmcs::set_control(
             VmcsControl32::PINBASED_EXEC_CONTROLS,
             Msr::IA32_VMX_TRUE_PINBASED_CTLS,
@@ -568,7 +551,6 @@ impl<H: HyperCraftHal> VmxVcpu<H> {
         // Enable EPT, RDTSCP, INVPCID, and unrestricted guest.
         use SecondaryControls as CpuCtrl2;
         let mut val = CpuCtrl2::ENABLE_EPT | CpuCtrl2::UNRESTRICTED_GUEST;
-        let raw_cpuid = CpuId::new();
         if let Some(features) = raw_cpuid.get_extended_processor_and_feature_identifiers() {
             if features.has_rdtscp() {
                 val |= CpuCtrl2::ENABLE_RDTSCP;
@@ -608,13 +590,22 @@ impl<H: HyperCraftHal> VmxVcpu<H> {
             0,
         )?;
 
+        let mut val = EntryCtrl::LOAD_IA32_PAT | EntryCtrl::LOAD_IA32_EFER;
+
+        if !is_guest {
+            // IA-32e mode guest
+            // On processors that support Intel 64 architecture, this control determines whether the logical processor is in IA-32e mode after VM entry.
+            // Its value is loaded into IA32_EFER.LMA as part of VM entry.
+            val |= EntryCtrl::IA32E_MODE_GUEST;
+        }
+
         // Load guest IA32_PAT/IA32_EFER on VM entry.
         use EntryControls as EntryCtrl;
         vmcs::set_control(
             VmcsControl32::VMENTRY_CONTROLS,
             Msr::IA32_VMX_TRUE_ENTRY_CTLS,
             Msr::IA32_VMX_ENTRY_CTLS.read() as u32,
-            (EntryCtrl::LOAD_IA32_PAT | EntryCtrl::LOAD_IA32_EFER).bits(),
+            val.bits(),
             0,
         )?;
 
@@ -624,6 +615,9 @@ impl<H: HyperCraftHal> VmxVcpu<H> {
         VmcsControl32::VMEXIT_MSR_STORE_COUNT.write(0)?;
         VmcsControl32::VMEXIT_MSR_LOAD_COUNT.write(0)?;
         VmcsControl32::VMENTRY_MSR_LOAD_COUNT.write(0)?;
+
+        // VmcsControlNW::CR4_GUEST_HOST_MASK.write(0)?;
+        VmcsControl32::CR3_TARGET_COUNT.write(0)?;
 
         // Pass-through exceptions (except #UD(6)), don't use I/O bitmap, set MSR bitmaps.
         let exception_bitmap: u32 = 1 << 6;
@@ -681,7 +675,7 @@ impl<H: HyperCraftHal> VmxVcpu<H> {
             xstate: XState::new(),
             is_host: true,
         };
-        // vcpu.setup_type15_msr_bitmap()?;
+
         vcpu.setup_type15_vmcs(ept_root, linux)?;
         let regs = vcpu.regs_mut();
         regs.rax = 0;
@@ -726,11 +720,6 @@ impl<H: HyperCraftHal> VmxVcpu<H> {
         trace!("VM exit: {:#x?}", exit_info);
         // debug!("VM exit: {:#x?}", exit_info);
 
-        let cr4 = VmcsGuestNW::CR4.read().unwrap();
-        if cr4.get_bit(18) {
-            // debug!("get cr4 osxsave bit");
-            // panic!("osxsave dead!");
-        }
         match self.builtin_vmexit_handler(&exit_info) {
             Some(result) => {
                 if result.is_err() {
@@ -743,71 +732,6 @@ impl<H: HyperCraftHal> VmxVcpu<H> {
         }
     }
 
-    fn setup_type15_msr_bitmap(&mut self) -> HyperResult {
-        // read
-        self.msr_bitmap.set_read_intercept(0x277, true); // IA32_PAT
-        self.msr_bitmap.set_read_intercept(0x2FF, true); // IA32_MTRR_DEF_TYPE
-
-        self.msr_bitmap.set_read_intercept(0x802, true); // IA32_X2APIC_APICID
-        self.msr_bitmap.set_read_intercept(0x803, true); // IA32_X2APIC_VERSION
-        self.msr_bitmap.set_read_intercept(0x808, true); // IA32_X2APIC_TPR
-        self.msr_bitmap.set_read_intercept(0x80A, true); // IA32_X2APIC_PPR
-        self.msr_bitmap.set_read_intercept(0x80D, true); // IA32_X2APIC_LDR
-        self.msr_bitmap.set_read_intercept(0x80F, true); // IA32_X2APIC_SIVR
-                                                         // IA32_X2APIC_ISR0..IA32_X2APIC_ISR7
-        for msr in 0x810..=0x817 {
-            self.msr_bitmap.set_read_intercept(msr, true);
-        }
-        // IA32_X2APIC_TMR0..IA32_X2APIC_TMR7
-        for msr in 0x818..=0x81F {
-            self.msr_bitmap.set_read_intercept(msr, true);
-        }
-        // IA32_X2APIC_IRR0..IA32_X2APIC_IRR7
-        for msr in 0x820..=0x827 {
-            self.msr_bitmap.set_read_intercept(msr, true);
-        }
-        self.msr_bitmap.set_read_intercept(0x828, true); // IA32_X2APIC_ESR
-        self.msr_bitmap.set_read_intercept(0x82F, true); // IA32_X2APIC_LVT_CMCI
-        self.msr_bitmap.set_read_intercept(0x830, true); // IA32_X2APIC_ICR
-                                                         // IA32_X2APIC_LVT_*
-        for msr in 0x832..=0x837 {
-            self.msr_bitmap.set_read_intercept(msr, true);
-        }
-        self.msr_bitmap.set_read_intercept(0x838, true); // IA32_X2APIC_INIT_COUNT
-        self.msr_bitmap.set_read_intercept(0x839, true); // IA32_X2APIC_CUR_COUNT
-        self.msr_bitmap.set_read_intercept(0x83E, true); // IA32_X2APIC_DIV_CONF
-
-        // write
-        self.msr_bitmap.set_write_intercept(0x1B, true); // IA32_APIC_BASE
-
-        // IA32_MTRR_*
-        for msr in 0x200..=0x277 {
-            self.msr_bitmap.set_write_intercept(msr, true);
-        }
-        self.msr_bitmap.set_write_intercept(0x277, true); // IA32_PAT
-        self.msr_bitmap.set_write_intercept(0x2FF, true); // IA32_MTRR_DEF_TYPE
-        self.msr_bitmap.set_write_intercept(0x38F, true); // IA32_PERF_GLOBAL_CTRL
-        for msr in 0xC80..=0xD8F {
-            self.msr_bitmap.set_write_intercept(msr, true);
-        }
-
-        self.msr_bitmap.set_write_intercept(0x808, true); // IA32_X2APIC_TPR
-        self.msr_bitmap.set_write_intercept(0x80B, true); // IA32_X2APIC_EOI
-        self.msr_bitmap.set_write_intercept(0x80F, true); // IA32_X2APIC_SIVR
-        self.msr_bitmap.set_write_intercept(0x828, true); // IA32_X2APIC_ESR
-        self.msr_bitmap.set_write_intercept(0x82F, true); // IA32_X2APIC_LVT_CMCI
-        self.msr_bitmap.set_write_intercept(0x830, true); // IA32_X2APIC_ICR
-                                                          // IA32_X2APIC_LVT_*
-        for msr in 0x832..=0x837 {
-            self.msr_bitmap.set_write_intercept(msr, true);
-        }
-        self.msr_bitmap.set_write_intercept(0x838, true); // IA32_X2APIC_INIT_COUNT
-        self.msr_bitmap.set_write_intercept(0x839, true); // IA32_X2APIC_CUR_COUNT
-        self.msr_bitmap.set_write_intercept(0x83E, true); // IA32_X2APIC_DIV_CONF
-
-        Ok(())
-    }
-
     fn setup_type15_vmcs(&mut self, ept_root: HostPhysAddr, linux: &LinuxContext) -> HyperResult {
         let paddr = self.vmcs.phys_addr() as u64;
         unsafe {
@@ -816,7 +740,7 @@ impl<H: HyperCraftHal> VmxVcpu<H> {
         self.bind_to_current_processor()?;
         self.setup_vmcs_host()?;
         self.setup_type15_vmcs_guest(linux)?;
-        self.setup_type15_vmcs_control(ept_root)?;
+        self.setup_vmcs_control(ept_root, false)?;
         self.unbind_from_current_processor()?;
         Ok(())
     }
@@ -878,95 +802,6 @@ impl<H: HyperCraftHal> VmxVcpu<H> {
         Ok(())
     }
 
-    fn setup_type15_vmcs_control(&mut self, ept_root: HostPhysAddr) -> HyperResult {
-        use super::vmcs::controls::*;
-        use PinbasedControls as PinCtrl;
-        vmcs::set_control_type15(
-            VmcsControl32::PINBASED_EXEC_CONTROLS,
-            Msr::IA32_VMX_PINBASED_CTLS.read(),
-            // NO INTR_EXITING to pass-through interrupts
-            PinCtrl::NMI_EXITING.bits(),
-            0,
-        )?;
-
-        // Intercept all I/O instructions, use MSR bitmaps, activate secondary controls,
-        // disable CR3 load/store interception.
-        use PrimaryControls as CpuCtrl;
-        vmcs::set_control_type15(
-            VmcsControl32::PRIMARY_PROCBASED_EXEC_CONTROLS,
-            Msr::IA32_VMX_PROCBASED_CTLS.read(),
-            // NO UNCOND_IO_EXITING to pass-through PIO
-            (CpuCtrl::USE_MSR_BITMAPS | CpuCtrl::SECONDARY_CONTROLS).bits(),
-            (CpuCtrl::CR3_LOAD_EXITING | CpuCtrl::CR3_STORE_EXITING).bits(),
-        )?;
-
-        // Enable EPT, RDTSCP, INVPCID, and unrestricted guest.
-        use SecondaryControls as CpuCtrl2;
-        let mut val = CpuCtrl2::ENABLE_EPT | CpuCtrl2::UNRESTRICTED_GUEST;
-        if let Some(features) = CpuId::new().get_extended_processor_and_feature_identifiers() {
-            if features.has_rdtscp() {
-                val |= CpuCtrl2::ENABLE_RDTSCP;
-            }
-        }
-        if let Some(features) = CpuId::new().get_extended_feature_info() {
-            if features.has_invpcid() {
-                val |= CpuCtrl2::ENABLE_INVPCID;
-            }
-        }
-        if let Some(features) = CpuId::new().get_extended_state_info() {
-            if features.has_xsaves_xrstors() {
-                val |= CpuCtrl2::ENABLE_XSAVES_XRSTORS;
-            }
-        }
-        vmcs::set_control_type15(
-            VmcsControl32::SECONDARY_PROCBASED_EXEC_CONTROLS,
-            Msr::IA32_VMX_PROCBASED_CTLS2.read(),
-            val.bits(),
-            0,
-        )?;
-
-        // Switch to 64-bit host, acknowledge interrupt info, switch IA32_PAT/IA32_EFER on VM exit.
-        use ExitControls as ExitCtrl;
-        vmcs::set_control_type15(
-            VmcsControl32::VMEXIT_CONTROLS,
-            Msr::IA32_VMX_EXIT_CTLS.read(),
-            (ExitCtrl::HOST_ADDRESS_SPACE_SIZE
-                | ExitCtrl::SAVE_IA32_PAT
-                | ExitCtrl::LOAD_IA32_PAT
-                | ExitCtrl::SAVE_IA32_EFER
-                | ExitCtrl::LOAD_IA32_EFER)
-                .bits(),
-            0,
-        )?;
-
-        // Load guest IA32_PAT/IA32_EFER on VM entry.
-        use EntryControls as EntryCtrl;
-        vmcs::set_control_type15(
-            VmcsControl32::VMENTRY_CONTROLS,
-            Msr::IA32_VMX_ENTRY_CTLS.read(),
-            (EntryCtrl::IA32E_MODE_GUEST | EntryCtrl::LOAD_IA32_PAT | EntryCtrl::LOAD_IA32_EFER)
-                .bits(),
-            0,
-        )?;
-
-        // No MSR switches if hypervisor doesn't use and there is only one vCPU.
-        VmcsControl32::VMEXIT_MSR_STORE_COUNT.write(0)?;
-        VmcsControl32::VMEXIT_MSR_LOAD_COUNT.write(0)?;
-        VmcsControl32::VMENTRY_MSR_LOAD_COUNT.write(0)?;
-
-        VmcsControlNW::CR4_GUEST_HOST_MASK.write(0)?;
-        VmcsControl32::CR3_TARGET_COUNT.write(0)?;
-
-        vmcs::set_ept_pointer(ept_root)?;
-
-        // Pass-through exceptions (except #UD(6)), don't use I/O bitmap, set MSR bitmaps.
-        let exception_bitmap: u32 = 1 << 6;
-
-        VmcsControl32::EXCEPTION_BITMAP.write(exception_bitmap)?;
-        VmcsControl64::MSR_BITMAPS_ADDR.write(self.msr_bitmap.phys_addr() as _)?;
-        Ok(())
-    }
-
     fn set_cr(&mut self, cr_idx: usize, val: u64) {
         (|| -> HyperResult {
             // debug!("set guest CR{} to val {:#x}", cr_idx, val);
@@ -1019,132 +854,6 @@ impl<H: HyperCraftHal> VmxVcpu<H> {
             })
         })()
         .expect("Failed to read guest control register")
-    }
-
-    /// Create a new [`VmxVcpu`].
-    pub fn new_nimbos(
-        vcpu_id: usize,
-        vmcs_revision_id: u32,
-        entry: GuestPhysAddr,
-        ept_root: HostPhysAddr,
-    ) -> HyperResult<Self> {
-        XState::enable_xsave();
-        let mut io_bitmap = IOBitmap::passthrough_all()?;
-        io_bitmap.set_intercept_of_range(0xcf8, 8, true);
-        let mut vcpu = Self {
-            guest_regs: GeneralRegisters::default(),
-            host_stack_top: 0,
-            vcpu_id,
-            launched: false,
-            vmcs: VmxRegion::new(vmcs_revision_id, false)?,
-            io_bitmap,
-            msr_bitmap: MsrBitmap::passthrough_all()?,
-            pending_events: VecDeque::with_capacity(8),
-            xstate: XState::new(),
-            is_host: false,
-        };
-        // vcpu.setup_msr_bitmap()?;
-        vcpu.setup_nimbos_vmcs(entry, ept_root)?;
-        info!("[HV] created VmxVcpu(vmcs: {:#x})", vcpu.vmcs.phys_addr());
-        Ok(vcpu)
-    }
-
-    fn setup_nimbos_vmcs(&mut self, entry: GuestPhysAddr, ept_root: HostPhysAddr) -> HyperResult {
-        let paddr = self.vmcs.phys_addr() as u64;
-        unsafe {
-            vmx::vmclear(paddr)?;
-        }
-        self.bind_to_current_processor()?;
-        self.setup_vmcs_host()?;
-        self.setup_vmcs_guest(entry)?;
-        self.setup_nimbos_vmcs_control(ept_root)?;
-        self.unbind_from_current_processor()?;
-        Ok(())
-    }
-    fn setup_nimbos_vmcs_control(&mut self, ept_root: HostPhysAddr) -> HyperResult {
-        // Intercept NMI and external interrupts.
-        use super::vmcs::controls::*;
-        use PinbasedControls as PinCtrl;
-        vmcs::set_control(
-            VmcsControl32::PINBASED_EXEC_CONTROLS,
-            Msr::IA32_VMX_TRUE_PINBASED_CTLS,
-            Msr::IA32_VMX_PINBASED_CTLS.read() as u32,
-            (PinCtrl::NMI_EXITING).bits(),
-            0,
-        )?;
-
-        // Intercept all I/O instructions, use MSR bitmaps, activate secondary controls,
-        // disable CR3 load/store interception.
-        use PrimaryControls as CpuCtrl;
-        vmcs::set_control(
-            VmcsControl32::PRIMARY_PROCBASED_EXEC_CONTROLS,
-            Msr::IA32_VMX_TRUE_PROCBASED_CTLS,
-            Msr::IA32_VMX_PROCBASED_CTLS.read() as u32,
-            (CpuCtrl::UNCOND_IO_EXITING | CpuCtrl::USE_MSR_BITMAPS | CpuCtrl::SECONDARY_CONTROLS)
-                .bits(),
-            (CpuCtrl::CR3_LOAD_EXITING
-                | CpuCtrl::CR3_STORE_EXITING
-                | CpuCtrl::CR8_LOAD_EXITING
-                | CpuCtrl::CR8_STORE_EXITING)
-                .bits(),
-        )?;
-
-        // Enable EPT, RDTSCP, INVPCID, and unrestricted guest.
-        use SecondaryControls as CpuCtrl2;
-        vmcs::set_control(
-            VmcsControl32::SECONDARY_PROCBASED_EXEC_CONTROLS,
-            Msr::IA32_VMX_PROCBASED_CTLS2,
-            0,
-            (CpuCtrl2::ENABLE_EPT
-                | CpuCtrl2::ENABLE_RDTSCP
-                | CpuCtrl2::ENABLE_INVPCID
-                | CpuCtrl2::UNRESTRICTED_GUEST
-                | CpuCtrl2::ENABLE_XSAVES_XRSTORS)
-                .bits(),
-            0,
-        )?;
-
-        // Switch to 64-bit host, acknowledge interrupt info, switch IA32_PAT/IA32_EFER on VM exit.
-        use ExitControls as ExitCtrl;
-        vmcs::set_control(
-            VmcsControl32::VMEXIT_CONTROLS,
-            Msr::IA32_VMX_TRUE_EXIT_CTLS,
-            Msr::IA32_VMX_EXIT_CTLS.read() as u32,
-            (ExitCtrl::HOST_ADDRESS_SPACE_SIZE
-                | ExitCtrl::ACK_INTERRUPT_ON_EXIT
-                | ExitCtrl::SAVE_IA32_PAT
-                | ExitCtrl::LOAD_IA32_PAT
-                | ExitCtrl::SAVE_IA32_EFER
-                | ExitCtrl::LOAD_IA32_EFER)
-                .bits(),
-            0,
-        )?;
-
-        // Load guest IA32_PAT/IA32_EFER on VM entry.
-        use EntryControls as EntryCtrl;
-        vmcs::set_control(
-            VmcsControl32::VMENTRY_CONTROLS,
-            Msr::IA32_VMX_TRUE_ENTRY_CTLS,
-            Msr::IA32_VMX_ENTRY_CTLS.read() as u32,
-            (EntryCtrl::LOAD_IA32_PAT | EntryCtrl::LOAD_IA32_EFER).bits(),
-            0,
-        )?;
-
-        vmcs::set_ept_pointer(ept_root)?;
-
-        // No MSR switches if hypervisor doesn't use and there is only one vCPU.
-        VmcsControl32::VMEXIT_MSR_STORE_COUNT.write(0)?;
-        VmcsControl32::VMEXIT_MSR_LOAD_COUNT.write(0)?;
-        VmcsControl32::VMENTRY_MSR_LOAD_COUNT.write(0)?;
-
-        // Pass-through exceptions (except #UD(6)), don't use I/O bitmap, set MSR bitmaps.
-        let exception_bitmap: u32 = 1 << 6;
-
-        VmcsControl32::EXCEPTION_BITMAP.write(exception_bitmap)?;
-        VmcsControl64::IO_BITMAP_A_ADDR.write(0)?;
-        VmcsControl64::IO_BITMAP_B_ADDR.write(0)?;
-        VmcsControl64::MSR_BITMAPS_ADDR.write(self.msr_bitmap.phys_addr() as _)?;
-        Ok(())
     }
 }
 
