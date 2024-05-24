@@ -40,6 +40,12 @@ pub struct XState {
 }
 
 #[derive(PartialEq, Eq, Debug)]
+pub enum VmCpuState {
+    PowerOff,
+    Running,
+}
+
+#[derive(PartialEq, Eq, Debug)]
 pub enum VmCpuMode {
     Real,
     Protected,
@@ -84,6 +90,7 @@ pub struct VmxVcpu<H: HyperCraftHal> {
     pending_events: VecDeque<(u8, Option<u32>)>,
     xstate: XState,
     is_host: bool,
+    state: VmCpuState,
 }
 
 impl<H: HyperCraftHal> VmxVcpu<H> {
@@ -106,6 +113,7 @@ impl<H: HyperCraftHal> VmxVcpu<H> {
             pending_events: VecDeque::with_capacity(8),
             xstate: XState::new(),
             is_host: false,
+            state: VmCpuState::PowerOff,
         };
         // Todo: remove these functions.
         vcpu.setup_io_bitmap()?;
@@ -169,6 +177,7 @@ impl<H: HyperCraftHal> VmxVcpu<H> {
                 self.vmx_resume();
             } else {
                 self.launched = true;
+                self.state = VmCpuState::Running;
                 VmcsHostNW::RSP
                     .write(&self.host_stack_top as *const _ as usize)
                     .unwrap();
@@ -351,6 +360,16 @@ impl<H: HyperCraftHal> VmxVcpu<H> {
         self.msr_bitmap.set_read_intercept(msr, intercept);
         self.msr_bitmap.set_write_intercept(msr, intercept);
     }
+
+    /// if vcpu is poweroff, return true
+    pub fn is_poweroff(&self) -> bool {
+        return self.state == VmCpuState::PowerOff;
+    }
+
+    /// PowerOff vcpu
+    pub fn poweroff(&mut self) {
+        self.state = VmCpuState::PowerOff;
+    }
 }
 
 // Implementation of private methods
@@ -383,6 +402,7 @@ impl<H: HyperCraftHal> VmxVcpu<H> {
             0x87..0x87 + 1,   // port about dma
             0x60..0x60 + 1,   // ports about ps/2 controller
             0x64..0x64 + 1,   // ports about ps/2 controller
+            0x604..0x604 + 1, // ports about shutdown
             0xcf8..0xcf8 + 8, // PCI
         ];
         for port_range in io_to_be_intercepted {
@@ -668,6 +688,7 @@ impl<H: HyperCraftHal> VmxVcpu<H> {
             pending_events: VecDeque::with_capacity(8),
             xstate: XState::new(),
             is_host: true,
+            state: VmCpuState::PowerOff,
         };
         // vcpu.setup_type15_msr_bitmap()?;
         vcpu.setup_type15_vmcs(ept_root, linux)?;
@@ -700,6 +721,7 @@ impl<H: HyperCraftHal> VmxVcpu<H> {
                 self.vmx_resume();
             } else {
                 self.launched = true;
+                self.state = VmCpuState::Running;
                 VmcsHostNW::RSP
                     .write(&self.host_stack_top as *const _ as usize)
                     .unwrap();
@@ -1030,6 +1052,7 @@ impl<H: HyperCraftHal> VmxVcpu<H> {
             pending_events: VecDeque::with_capacity(8),
             xstate: XState::new(),
             is_host: false,
+            state: VmCpuState::PowerOff,
         };
         // vcpu.setup_msr_bitmap()?;
         vcpu.setup_nimbos_vmcs(entry, ept_root)?;
@@ -1389,7 +1412,7 @@ impl<H: HyperCraftHal> VmxVcpu<H> {
                 if regs_clone.rcx == 0 {
                     // Bit 05: WAITPKG.
                     res.ecx.set_bit(5, false); // clear waitpkg
-                    // Bit 16: LA57. Supports 57-bit linear addresses and five-level paging if 1.
+                                               // Bit 16: LA57. Supports 57-bit linear addresses and five-level paging if 1.
                     res.ecx.set_bit(16, false); // clear LA57
                 }
 

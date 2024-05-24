@@ -155,10 +155,13 @@ impl<H: HyperCraftHal, PD: PerCpuDevices<H>, VD: PerVmDevices<H>, G: GuestPageTa
                     }
                 }
             }
-
+            if vcpu.is_poweroff() {
+                debug!("VM poweroff");
+                break;
+            }
             vcpu_device.check_events(vcpu)?;
         }
-
+        debug!("exit_vm");
         Ok(())
     }
 
@@ -221,7 +224,11 @@ impl<H: HyperCraftHal, PD: PerCpuDevices<H>, VD: PerVmDevices<H>, G: GuestPageTa
                 // debug!("this is instr {:?}", instr);
             }
             // vcpu_device.check_events(vcpu)?;
+            if vcpu.is_poweroff() {
+                break;
+            }
         }
+        Ok(())
     }
 
     /// Unbind the specified [`VCpu`] bond by [`VM::<H>::bind_vcpu`].
