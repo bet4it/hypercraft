@@ -2,6 +2,7 @@ mod csrs;
 mod detect;
 mod devices;
 mod ept;
+mod gdb;
 mod regs;
 mod sbi;
 mod smp;

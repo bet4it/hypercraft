@@ -54,6 +54,22 @@ pub struct VmRegionList {
 pub struct VmPages;
 
 impl VmPages {
+    /// Copies `len` bytes from `src` in the host to `dest_gpa` in the guest's physical address space.
+    pub fn copy_to_guest(&self, dest_gpa: GuestPhysAddr, src: &[u8]) -> HyperResult<usize> {
+        let len_copied = unsafe { _copy_to_guest(dest_gpa, src.as_ptr(), src.len()) };
+        if len_copied == 0 {
+            return Err(HyperError::PageFault);
+        }
+        Ok(len_copied)
+    }
+    /// Copies `len` bytes from `src_gpa` in the guest's physical address space to `dest` in the host.
+    pub fn copy_from_guest(&self, dest: &mut [u8], src_gpa: GuestPhysAddr) -> HyperResult<usize> {
+        let len_copied = unsafe { _copy_from_guest(dest.as_mut_ptr(), src_gpa, dest.len()) };
+        if len_copied == 0 {
+            return Err(HyperError::PageFault);
+        }
+        Ok(len_copied)
+    }
     /// Fetches and decodes the instruction at `pc` in the guest's virtual address.
     pub fn fetch_guest_instruction(&self, pc: GuestPhysAddr) -> HyperResult<u32> {
         let mut raw_inst = 0u32;

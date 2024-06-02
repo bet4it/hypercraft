@@ -14,25 +14,29 @@ use crate::{
     arch::sbi::SBI_ERR_NOT_SUPPORTED, vcpus::VM_CPUS_MAX, GprIndex, GuestPageTableTrait,
     GuestPhysAddr, GuestVirtAddr, HyperCraftHal, HyperError, HyperResult, VCpu, VmCpus, VmExitInfo,
 };
+use gdbstub::{conn::ConnectionExt, stub::GdbStub};
 use riscv_decode::Instruction;
 use sbi_rt::{pmu_counter_get_info, pmu_counter_stop};
 
 /// A VM that is being run.
-pub struct VM<H: HyperCraftHal, G: GuestPageTableTrait> {
+pub struct VM<H: HyperCraftHal, G: GuestPageTableTrait, C: ConnectionExt> {
     vcpus: VmCpus<H>,
-    gpt: G,
-    vm_pages: VmPages,
+    pub(crate) gpt: G,
+    pub(crate) vm_pages: VmPages,
     plic: PlicState,
+    pub(crate) gdbstub: Option<GdbStub<'static, Self, C>>,
 }
 
-impl<H: HyperCraftHal, G: GuestPageTableTrait> VM<H, G> {
+impl<H: HyperCraftHal, G: GuestPageTableTrait, C: ConnectionExt> VM<H, G, C> {
     /// Create a new VM with `vcpus` vCPUs and `gpt` as the guest page table.
-    pub fn new(vcpus: VmCpus<H>, gpt: G) -> HyperResult<Self> {
+    pub fn new(vcpus: VmCpus<H>, gpt: G, conn: C) -> HyperResult<Self> {
+        let gdbstub = Some(GdbStub::new(conn));
         Ok(Self {
             vcpus,
             gpt,
             vm_pages: VmPages::default(),
             plic: PlicState::new(0xC00_0000 + 0xffff_ffc0_0000_0000),
+            gdbstub,
         })
     }
 
@@ -42,11 +46,18 @@ impl<H: HyperCraftHal, G: GuestPageTableTrait> VM<H, G> {
         vcpu.init_page_map(self.gpt.token());
     }
 
+    /// Get current vcpu
+    pub fn get_current_vcpu(&mut self) -> &mut VCpu<H> {
+        self.vcpus.get_vcpu(0).unwrap()
+    }
+
     #[allow(unused_variables, deprecated)]
     /// Run the host VM's vCPU with ID `vcpu_id`. Does not return.
-    pub fn run(&mut self, vcpu_id: usize) {
+    pub fn run(&mut self, vcpu_id: usize) -> ! {
         let mut vm_exit_info: VmExitInfo;
         let mut gprs = GeneralPurposeRegisters::default();
+        let vcpu = self.vcpus.get_vcpu(vcpu_id).unwrap();
+        self.start_gdbserver();
         loop {
             let mut len = 4;
             let mut advance_pc = false;
@@ -145,7 +156,7 @@ impl<H: HyperCraftHal, G: GuestPageTableTrait> VM<H, G> {
 }
 
 // Privaie methods implementation
-impl<H: HyperCraftHal, G: GuestPageTableTrait> VM<H, G> {
+impl<H: HyperCraftHal, G: GuestPageTableTrait, C: ConnectionExt> VM<H, G, C> {
     fn handle_page_fault(
         &mut self,
         inst_addr: GuestVirtAddr,
@@ -154,7 +165,9 @@ impl<H: HyperCraftHal, G: GuestPageTableTrait> VM<H, G> {
         gprs: &mut GeneralPurposeRegisters,
     ) -> HyperResult<usize> {
         //  plic
-        if fault_addr >= self.plic.base() - 0xffff_ffc0_0000_0000 && fault_addr < self.plic.base() + 0x0400_0000 - 0xffff_ffc0_0000_0000 {
+        if fault_addr >= self.plic.base() - 0xffff_ffc0_0000_0000
+            && fault_addr < self.plic.base() + 0x0400_0000 - 0xffff_ffc0_0000_0000
+        {
             self.handle_plic(inst_addr, inst, fault_addr + 0xffff_ffc0_0000_0000, gprs)
         } else {
             error!("inst_addr: {:#x}, fault_addr: {:#x}", inst_addr, fault_addr);

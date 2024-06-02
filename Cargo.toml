@@ -25,6 +25,10 @@ spinlock = { path = "../spinlock" }
 
 memory_addr = { path = "../memory_addr" }
 
+gdbstub = {version = "0.7", default-features = false, features = ["alloc"]}
+gdbstub_arch = "0.3"
+axerrno = { path = "../axerrno" }
+
 [target.'cfg(target_arch = "riscv64")'.dependencies]
 riscv = { git = "https://github.com/rcore-os/riscv", features = ["inline-asm"] }
 riscv-decode = { git = "https://github.com/KuangjuX/riscv-decode.git" }

@@ -360,6 +360,16 @@ impl<H: HyperCraftHal> VCpu<H> {
         self.regs.guest_regs.gprs.set_reg(index, val);
     }
 
+    /// Get current guest pc
+    pub fn get_pc(&mut self) -> usize {
+        self.regs.guest_regs.sepc
+    }
+
+    /// Set current guest pc
+    pub fn set_pc(&mut self, pc: usize) {
+        self.regs.guest_regs.sepc = pc;
+    }
+
     /// Advance guest pc by `instr_len` bytes
     pub fn advance_pc(&mut self, instr_len: usize) {
         self.regs.guest_regs.sepc += instr_len
