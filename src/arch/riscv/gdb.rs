@@ -1,61 +1,100 @@
 use super::regs::GeneralPurposeRegisters;
 use crate::{GprIndex, GuestPageTableTrait, HyperCraftHal, HyperError as Error, VCpu, VM};
 use gdbstub::{
+    common::Signal,
     conn::ConnectionExt,
-    stub::{state_machine::GdbStubStateMachine, GdbStub},
-    target::{self, ext::base::singlethread::SingleThreadBase, Target, TargetError, TargetResult},
+    stub::{state_machine::GdbStubStateMachine, GdbStub, SingleThreadStopReason},
+    target::{
+        ext::{
+            base::{
+                singlethread::{SingleThreadBase, SingleThreadResume, SingleThreadResumeOps},
+                BaseOps,
+            },
+            breakpoints::{Breakpoints, SwBreakpoint, WatchKind},
+        },
+        Target, TargetError, TargetResult,
+    },
 };
 use gdbstub_arch::riscv::reg::RiscvCoreRegs;
 
-impl<H: HyperCraftHal, G: GuestPageTableTrait, C: ConnectionExt> VM<H, G, C> {
-    pub(crate) fn init_gdbserver(&mut self, conn: C) {
-        let gdbstub = GdbStub::new(conn);
-        self.gdbstub = Some(gdbstub);
+impl<H, G, C> VM<H, G, C>
+where
+    H: HyperCraftHal,
+    G: GuestPageTableTrait,
+    C: ConnectionExt,
+{
+    /// Initialize gdbserver with connection
+    pub fn gdbserver_init(&mut self, conn: C) {
+        let gdbstub = GdbStub::new(conn).run_state_machine(self);
+        if let Ok(gdbstub) = gdbstub {
+            self.gdbstub = Some(gdbstub)
+        }
     }
 
-    pub(crate) fn start_gdbserver(&mut self) {
+    pub(crate) fn gdbserver_loop(&mut self) {
         if let Some(gdbstub) = self.gdbstub.take() {
-            if let Ok(gdbstub) = gdbstub.run_state_machine(self) {
-                let mut gdb = gdbstub;
-                loop {
-                    gdb = match gdb {
-                        GdbStubStateMachine::Idle(mut gdb_inner) => {
-                            if let Ok(byte) = gdb_inner.borrow_conn().read() {
-                                if let Ok(x) = gdb_inner.incoming_data(self, byte) {
-                                    x
-                                } else {
-                                    panic!("Shouldn't be here");
-                                }
+            let mut gdb: GdbStubStateMachine<'_, VM<H, G, C>, C> = gdbstub;
+            loop {
+                gdb = match gdb {
+                    GdbStubStateMachine::Idle(mut gdb_inner) => {
+                        if let Ok(byte) = gdb_inner.borrow_conn().read() {
+                            if let Ok(x) = gdb_inner.incoming_data(self, byte) {
+                                x
                             } else {
                                 panic!("Shouldn't be here");
                             }
+                        } else {
+                            panic!("Shouldn't be here");
                         }
-                        GdbStubStateMachine::Running(_) => {
-                            debug!("Enter GdbStubStateMachine::Running");
-                            break;
-                        }
-                        GdbStubStateMachine::CtrlCInterrupt(_) => {
-                            debug!("Enter GdbStubStateMachine::CtrlCInterrupt");
-                            break;
-                        }
-                        GdbStubStateMachine::Disconnected(_gdb_inner) => {
-                            debug!("Enter GdbStubStateMachine::Disconnected");
-                            break;
-                        }
+                    }
+                    GdbStubStateMachine::Running(_) => {
+                        debug!("Enter GdbStubStateMachine::Running");
+                        break;
+                    }
+                    GdbStubStateMachine::CtrlCInterrupt(_) => {
+                        debug!("Enter GdbStubStateMachine::CtrlCInterrupt");
+                        break;
+                    }
+                    GdbStubStateMachine::Disconnected(_) => {
+                        debug!("Enter GdbStubStateMachine::Disconnected");
+                        break;
                     }
                 }
             }
+            self.gdbstub = Some(gdb);
         }
+    }
+
+    pub(crate) fn gdbserver_report(&mut self) {
+        let mut gdb = self.gdbstub.take().unwrap();
+        let reason = SingleThreadStopReason::DoneStep;
+
+        if let GdbStubStateMachine::Running(gdb_inner) = gdb {
+            match gdb_inner.report_stop(self, reason) {
+                Ok(gdb_state) => gdb = gdb_state,
+                Err(_) => {
+                    debug!("Report stop error!");
+                    return;
+                }
+            }
+        }
+        self.gdbstub = Some(gdb);
+        self.gdbserver_loop();
     }
 }
 
-impl<H: HyperCraftHal, C: ConnectionExt, G: GuestPageTableTrait> Target for VM<H, G, C> {
+impl<H, G, C> Target for VM<H, G, C>
+where
+    H: HyperCraftHal,
+    G: GuestPageTableTrait,
+    C: ConnectionExt,
+{
     type Arch = gdbstub_arch::riscv::Riscv64;
     type Error = Error;
 
     #[inline(always)]
-    fn base_ops(&mut self) -> target::ext::base::BaseOps<'_, Self::Arch, Self::Error> {
-        target::ext::base::BaseOps::SingleThread(self)
+    fn base_ops(&mut self) -> BaseOps<'_, Self::Arch, Self::Error> {
+        BaseOps::SingleThread(self)
     }
 
     fn guard_rail_implicit_sw_breakpoints(&self) -> bool {
@@ -63,7 +102,12 @@ impl<H: HyperCraftHal, C: ConnectionExt, G: GuestPageTableTrait> Target for VM<H
     }
 }
 
-impl<H: HyperCraftHal, G: GuestPageTableTrait, C: ConnectionExt> SingleThreadBase for VM<H, G, C> {
+impl<H, G, C> SingleThreadBase for VM<H, G, C>
+where
+    H: HyperCraftHal,
+    G: GuestPageTableTrait,
+    C: ConnectionExt,
+{
     fn read_registers(&mut self, regs: &mut RiscvCoreRegs<u64>) -> TargetResult<(), Self> {
         let vcpu = self.get_current_vcpu();
         let mut gprs = GeneralPurposeRegisters::default();
@@ -104,5 +148,21 @@ impl<H: HyperCraftHal, G: GuestPageTableTrait, C: ConnectionExt> SingleThreadBas
             Ok(_) => Ok(()),
             Err(_) => Err(TargetError::Errno(1)),
         }
+    }
+
+    #[inline(always)]
+    fn support_resume(&mut self) -> Option<SingleThreadResumeOps<'_, Self>> {
+        Some(self)
+    }
+}
+
+impl<H, G, C> SingleThreadResume for VM<H, G, C>
+where
+    H: HyperCraftHal,
+    G: GuestPageTableTrait,
+    C: ConnectionExt,
+{
+    fn resume(&mut self, _signal: Option<Signal>) -> Result<(), Self::Error> {
+        Ok(())
     }
 }

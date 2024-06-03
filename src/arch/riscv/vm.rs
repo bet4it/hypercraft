@@ -14,7 +14,7 @@ use crate::{
     arch::sbi::SBI_ERR_NOT_SUPPORTED, vcpus::VM_CPUS_MAX, GprIndex, GuestPageTableTrait,
     GuestPhysAddr, GuestVirtAddr, HyperCraftHal, HyperError, HyperResult, VCpu, VmCpus, VmExitInfo,
 };
-use gdbstub::{conn::ConnectionExt, stub::GdbStub};
+use gdbstub::{conn::ConnectionExt, stub::state_machine::GdbStubStateMachine};
 use riscv_decode::Instruction;
 use sbi_rt::{pmu_counter_get_info, pmu_counter_stop};
 
@@ -24,19 +24,18 @@ pub struct VM<H: HyperCraftHal, G: GuestPageTableTrait, C: ConnectionExt> {
     pub(crate) gpt: G,
     pub(crate) vm_pages: VmPages,
     plic: PlicState,
-    pub(crate) gdbstub: Option<GdbStub<'static, Self, C>>,
+    pub(crate) gdbstub: Option<GdbStubStateMachine<'static, Self, C>>,
 }
 
 impl<H: HyperCraftHal, G: GuestPageTableTrait, C: ConnectionExt> VM<H, G, C> {
     /// Create a new VM with `vcpus` vCPUs and `gpt` as the guest page table.
-    pub fn new(vcpus: VmCpus<H>, gpt: G, conn: C) -> HyperResult<Self> {
-        let gdbstub = Some(GdbStub::new(conn));
+    pub fn new(vcpus: VmCpus<H>, gpt: G) -> HyperResult<Self> {
         Ok(Self {
             vcpus,
             gpt,
             vm_pages: VmPages::default(),
             plic: PlicState::new(0xC00_0000 + 0xffff_ffc0_0000_0000),
-            gdbstub,
+            gdbstub: None,
         })
     }
 
@@ -57,7 +56,7 @@ impl<H: HyperCraftHal, G: GuestPageTableTrait, C: ConnectionExt> VM<H, G, C> {
         let mut vm_exit_info: VmExitInfo;
         let mut gprs = GeneralPurposeRegisters::default();
         let vcpu = self.vcpus.get_vcpu(vcpu_id).unwrap();
-        self.start_gdbserver();
+        self.gdbserver_loop();
         loop {
             let mut len = 4;
             let mut advance_pc = false;
@@ -141,6 +140,7 @@ impl<H: HyperCraftHal, G: GuestPageTableTrait, C: ConnectionExt> VM<H, G, C> {
                         .read_and_clear_bits(traps::interrupt::SUPERVISOR_TIMER);
                 }
                 VmExitInfo::ExternalInterruptEmulation => self.handle_irq(),
+                VmExitInfo::Breakpoint => self.gdbserver_report(),
                 _ => {}
             }
 

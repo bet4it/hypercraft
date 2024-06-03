@@ -54,4 +54,6 @@ pub enum VmExitInfo {
     TimerInterruptEmulation,
     /// An external interrupt for the running vCPU that can't be delegated and must be injected.
     ExternalInterruptEmulation,
+    /// Encouter a breakpoint
+    Breakpoint,
 }
