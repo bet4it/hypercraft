@@ -4,6 +4,8 @@ use crate::arch::vmx::VmxPerCpuState;
 
 use super::VCpu;
 
+use gdbstub::conn::ConnectionExt;
+
 /// Host per-CPU states to run the guest. All methods must be called on the corresponding CPU.
 pub struct PerCpu<H: HyperCraftHal> {
     cpu_id: usize,
@@ -52,11 +54,11 @@ impl<H: HyperCraftHal> PerCpu<H> {
 
     /// Create a [`VCpu<H>`], set the entry point to `entry`, set the nested
     /// page table root to `npt_root`.
-    pub fn create_vcpu(
+    pub fn create_vcpu<C: ConnectionExt>(
         &self,
         entry: GuestPhysAddr,
         npt_root: HostPhysAddr,
-    ) -> HyperResult<VCpu<H>> {
+    ) -> HyperResult<VCpu<H, C>> {
         if !self.is_enabled() {
             Err(HyperError::BadState)
         } else {

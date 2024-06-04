@@ -34,6 +34,7 @@ mod arch;
 mod hal;
 mod memory;
 mod traits;
+#[cfg(not(target_arch = "x86_64"))]
 mod vcpus;
 
 /// HyperCraft Result Define.
@@ -55,6 +56,7 @@ pub use memory::{
     GuestPageNum, GuestPageTableTrait, GuestPhysAddr, GuestVirtAddr, HostPageNum, HostPhysAddr,
     HostVirtAddr,
 };
+#[cfg(not(target_arch = "x86_64"))]
 pub use vcpus::VmCpus;
 
 #[cfg(target_arch = "aarch64")]

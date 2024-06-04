@@ -4,6 +4,7 @@ mod regs;
 // Codes in this module come mainly from https://github.com/rcore-os/RVM-Tutorial
 
 mod ept;
+mod gdb;
 mod lapic;
 mod memory;
 mod msr;
@@ -11,6 +12,7 @@ mod vmx;
 mod percpu;
 
 use crate::{GuestPageTableTrait, HyperCraftHal};
+use gdbstub::conn::ConnectionExt;
 use page_table::PagingIf;
 
 /// Initialize the hypervisor runtime.
@@ -31,7 +33,7 @@ pub use vmx::{VmxExitReason, VmxExitInfo};
 ////// Following are things to be implemented
 
 
-impl<H: HyperCraftHal> VCpu<H> {
+impl<H: HyperCraftHal, C: ConnectionExt> VCpu<H, C> {
     /// Get the vcpu id.
     pub fn vcpu_id(&self) -> usize {
         todo!()

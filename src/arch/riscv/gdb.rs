@@ -33,7 +33,7 @@ where
 
     pub(crate) fn gdbserver_loop(&mut self) {
         if let Some(gdbstub) = self.gdbstub.take() {
-            let mut gdb: GdbStubStateMachine<'_, VM<H, G, C>, C> = gdbstub;
+            let mut gdb = gdbstub;
             loop {
                 gdb = match gdb {
                     GdbStubStateMachine::Idle(mut gdb_inner) => {

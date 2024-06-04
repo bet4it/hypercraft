@@ -1,10 +1,15 @@
+use gdbstub::conn::ConnectionExt;
+
 #[cfg(target_arch = "riscv64")]
 use crate::{GprIndex, VmExitInfo,};
 
 use crate::arch::VCpu;
 use crate::{
-    GuestPageTableTrait, GuestPhysAddr, HyperCraftHal, HyperResult, VmCpus,
+    GuestPageTableTrait, GuestPhysAddr, HyperCraftHal, HyperResult,
 };
+
+#[cfg(not(target_arch = "x86_64"))]
+use crate::VmCpus;
 
 #[cfg(target_arch = "riscv64")]
 /// Trait for VCpu struct.
@@ -26,6 +31,7 @@ pub trait VCpuTrait {
 }
 
 /// Trait for PerCpu struct.
+#[cfg(target_arch = "x86_64")]
 pub trait PerCpuTrait<H: HyperCraftHal> {
     /// Initializes the `PerCpu` structures for each CPU. This (the boot CPU's) per-CPU
     /// area is initialized and loaded into TP as well.
@@ -35,13 +41,14 @@ pub trait PerCpuTrait<H: HyperCraftHal> {
     fn setup_this_cpu(hart_id: usize) -> HyperResult<()>;
 
     /// Create a `VCpu`, set the entry point to `entry` and bind this vcpu into the current CPU.
-    fn create_vcpu(&mut self, vcpu_id: usize, entry: GuestPhysAddr) -> HyperResult<VCpu<H>>;
+    fn create_vcpu<C: ConnectionExt>(&mut self, vcpu_id: usize, entry: GuestPhysAddr) -> HyperResult<VCpu<H, C>>;
 
     /// Returns this CPU's `PerCpu` structure.
     fn this_cpu() -> &'static mut Self;
 }
 
 /// Trait for VM struct.
+#[cfg(not(target_arch = "x86_64"))]
 pub trait VmTrait<H: HyperCraftHal, G: GuestPageTableTrait> {
     /// Create a new VM with `vcpus` vCPUs and `gpt` as the guest page table.
     fn new(vcpus: VmCpus<H>, gpt: G) -> HyperResult<Self>
