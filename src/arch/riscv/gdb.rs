@@ -132,19 +132,11 @@ where
     }
 
     fn read_addrs(&mut self, start_addr: u64, data: &mut [u8]) -> TargetResult<usize, Self> {
-        self.gpt
-            .translate(start_addr as usize)
-            .map_err(|_| TargetError::Errno(1))?;
-        self.vm_pages
-            .copy_from_guest(data, start_addr as usize)
-            .map_err(|_| TargetError::Errno(1))
+        self.gpt.read_guest_phys_addrs(start_addr as usize, data).map_err(|_| TargetError::Errno(1))
     }
 
     fn write_addrs(&mut self, start_addr: u64, data: &[u8]) -> TargetResult<(), Self> {
-        self.gpt
-            .translate(start_addr as usize)
-            .map_err(|_| TargetError::Errno(1))?;
-        match self.vm_pages.copy_to_guest(start_addr as usize, data) {
+        match self.gpt.write_guest_phys_addrs(start_addr as usize, data) {
             Ok(_) => Ok(()),
             Err(_) => Err(TargetError::Errno(1)),
         }

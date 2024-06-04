@@ -50,4 +50,10 @@ pub trait GuestPageTableTrait {
 
     /// Get guest page table token.
     fn token(&self) -> usize;
+
+    /// Read data from guest physical address
+    fn read_guest_phys_addrs(&self, paddr: GuestPhysAddr, buf: &mut [u8]) -> HyperResult<usize>;
+
+    /// Write data to guest physical address
+    fn write_guest_phys_addrs(&mut self, paddr: GuestPhysAddr, buf: &[u8]) -> HyperResult<usize>;
 }
