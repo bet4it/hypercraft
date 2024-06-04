@@ -39,7 +39,7 @@ pub trait HyperCraftHal: Sized {
     fn virt_to_phys(va: HostVirtAddr) -> HostPhysAddr;
     /// VM-Exit handler.
     #[cfg(target_arch = "x86_64")]
-    fn vmexit_handler<C: ConnectionExt>(vcpu: &mut crate::arch::VCpu<Self, C>) -> HyperResult;
+    fn vmexit_handler<G: GuestPageTableTrait, C: ConnectionExt>(vcpu: &mut crate::arch::VCpu<Self, G, C>) -> HyperResult;
     /// Current time in nanoseconds.
     #[cfg(target_arch = "x86_64")]
     fn current_time_nanos() -> u64;

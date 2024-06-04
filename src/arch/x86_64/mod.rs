@@ -33,7 +33,7 @@ pub use vmx::{VmxExitReason, VmxExitInfo};
 ////// Following are things to be implemented
 
 
-impl<H: HyperCraftHal, C: ConnectionExt> VCpu<H, C> {
+impl<H: HyperCraftHal, G: GuestPageTableTrait, C: ConnectionExt> VCpu<H, G, C> {
     /// Get the vcpu id.
     pub fn vcpu_id(&self) -> usize {
         todo!()

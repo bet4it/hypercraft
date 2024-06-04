@@ -1,4 +1,4 @@
-use crate::{HyperCraftHal, HostPhysAddr, GuestPhysAddr};
+use crate::{GuestPageTableTrait, GuestPhysAddr, HostPhysAddr, HyperCraftHal};
 use crate::{HyperResult, HyperError};
 use crate::arch::vmx::VmxPerCpuState;
 
@@ -54,15 +54,15 @@ impl<H: HyperCraftHal> PerCpu<H> {
 
     /// Create a [`VCpu<H>`], set the entry point to `entry`, set the nested
     /// page table root to `npt_root`.
-    pub fn create_vcpu<C: ConnectionExt>(
+    pub fn create_vcpu<G: GuestPageTableTrait, C: ConnectionExt>(
         &self,
         entry: GuestPhysAddr,
-        npt_root: HostPhysAddr,
-    ) -> HyperResult<VCpu<H, C>> {
+        ept: G,
+    ) -> HyperResult<VCpu<H, G, C>> {
         if !self.is_enabled() {
             Err(HyperError::BadState)
         } else {
-            VCpu::new(&self.arch, entry, npt_root)
+            VCpu::new(&self.arch, entry, ept)
         }
     }
 }

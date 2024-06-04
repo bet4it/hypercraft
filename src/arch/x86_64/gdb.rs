@@ -6,7 +6,12 @@ use gdbstub::{
 };
 use gdbstub_arch::x86::reg::X86_64CoreRegs;
 
-impl<H: HyperCraftHal, C: ConnectionExt> VCpu<H, C> {
+impl<H, G, C> VCpu<H, G, C>
+where
+    H: HyperCraftHal,
+    G: GuestPageTableTrait,
+    C: ConnectionExt,
+{
     /// Initialize gdbserver with connection
     pub fn gdbserver_init(&mut self, conn: C) {
         let gdbstub = GdbStub::new(conn).run_state_machine(self);
@@ -50,7 +55,12 @@ impl<H: HyperCraftHal, C: ConnectionExt> VCpu<H, C> {
     }
 }
 
-impl<H: HyperCraftHal, C: ConnectionExt> Target for VCpu<H, C> {
+impl<H, G, C> Target for VCpu<H, G, C>
+where
+    H: HyperCraftHal,
+    G: GuestPageTableTrait,
+    C: ConnectionExt,
+{
     type Arch = gdbstub_arch::x86::X86_64_SSE;
     type Error = Error;
 
@@ -64,7 +74,12 @@ impl<H: HyperCraftHal, C: ConnectionExt> Target for VCpu<H, C> {
     }
 }
 
-impl<H: HyperCraftHal, C: ConnectionExt> SingleThreadBase for VCpu<H, C> {
+impl<H, G, C> SingleThreadBase for VCpu<H, G, C>
+where
+    H: HyperCraftHal,
+    G: GuestPageTableTrait,
+    C: ConnectionExt,
+{
     fn read_registers(&mut self, regs: &mut X86_64CoreRegs) -> TargetResult<(), Self> {
         let gpr = self.regs();
         regs.regs = [
@@ -79,11 +94,14 @@ impl<H: HyperCraftHal, C: ConnectionExt> SingleThreadBase for VCpu<H, C> {
         Ok(())
     }
 
-    fn read_addrs(&mut self, _start_addr: u64, _data: &mut [u8]) -> TargetResult<usize, Self> {
-        Err(TargetError::Errno(1))
+    fn read_addrs(&mut self, start_addr: u64, data: &mut [u8]) -> TargetResult<usize, Self> {
+        self.ept.read_guest_phys_addrs(start_addr as usize, data).map_err(|_| TargetError::Errno(1))
     }
 
-    fn write_addrs(&mut self, _start_addr: u64, _data: &[u8]) -> TargetResult<(), Self> {
-        Err(TargetError::Errno(1))
+    fn write_addrs(&mut self, start_addr: u64, data: &[u8]) -> TargetResult<(), Self> {
+        match self.ept.write_guest_phys_addrs(start_addr as usize, data) {
+            Ok(_) => Ok(()),
+            Err(_) => Err(TargetError::Errno(1)),
+        }
     }
 }

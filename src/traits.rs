@@ -41,7 +41,7 @@ pub trait PerCpuTrait<H: HyperCraftHal> {
     fn setup_this_cpu(hart_id: usize) -> HyperResult<()>;
 
     /// Create a `VCpu`, set the entry point to `entry` and bind this vcpu into the current CPU.
-    fn create_vcpu<C: ConnectionExt>(&mut self, vcpu_id: usize, entry: GuestPhysAddr) -> HyperResult<VCpu<H, C>>;
+    fn create_vcpu<G: GuestPageTableTrait, C: ConnectionExt>(&mut self, vcpu_id: usize, entry: GuestPhysAddr) -> HyperResult<VCpu<H, G, C>>;
 
     /// Returns this CPU's `PerCpu` structure.
     fn this_cpu() -> &'static mut Self;

@@ -17,28 +17,29 @@ use super::VmxPerCpuState;
 use super::definitions::VmxExitReason;
 use crate::arch::{msr::Msr, memory::NestedPageFaultInfo, regs::GeneralRegisters};
 use crate::arch::lapic::ApicTimer;
-use crate::{GuestPhysAddr, HostPhysAddr, HyperCraftHal, HyperResult};
+use crate::{GuestPageTableTrait, GuestPhysAddr, HostPhysAddr, HyperCraftHal, HyperResult};
 
 use gdbstub::conn::ConnectionExt;
 use gdbstub::stub::state_machine::GdbStubStateMachine;
 
 /// A virtual CPU within a guest.
 #[repr(C)]
-pub struct VmxVcpu<H: HyperCraftHal, C: ConnectionExt> {
+pub struct VmxVcpu<H: HyperCraftHal, G: GuestPageTableTrait, C: ConnectionExt> {
     guest_regs: GeneralRegisters,
     host_stack_top: u64,
     vmcs: VmxRegion<H>,
     msr_bitmap: MsrBitmap<H>,
     apic_timer: ApicTimer<H>,
     pending_events: VecDeque<(u8, Option<u32>)>,
+    pub(crate) ept: G,
     pub(crate) gdbstub: Option<GdbStubStateMachine<'static, Self, C>>,
 }
 
-impl<H: HyperCraftHal, C: ConnectionExt> VmxVcpu<H, C> {
+impl<H: HyperCraftHal, G: GuestPageTableTrait, C: ConnectionExt> VmxVcpu<H, G, C> {
     pub(crate) fn new(
         percpu: &VmxPerCpuState<H>,
         entry: GuestPhysAddr,
-        ept_root: HostPhysAddr,
+        ept: G,
     ) -> HyperResult<Self> {
         let mut vcpu = Self {
             guest_regs: GeneralRegisters::default(),
@@ -47,10 +48,11 @@ impl<H: HyperCraftHal, C: ConnectionExt> VmxVcpu<H, C> {
             msr_bitmap: MsrBitmap::passthrough_all()?,
             apic_timer: ApicTimer::new(),
             pending_events: VecDeque::with_capacity(8),
+            ept,
             gdbstub: None,
         };
         vcpu.setup_msr_bitmap()?;
-        vcpu.setup_vmcs(entry, ept_root)?;
+        vcpu.setup_vmcs(entry)?;
         info!("[HV] created VmxVcpu(vmcs: {:#x})", vcpu.vmcs.phys_addr());
         Ok(vcpu)
     }
@@ -147,7 +149,7 @@ impl<H: HyperCraftHal, C: ConnectionExt> VmxVcpu<H, C> {
 }
 
 // Implementation of private methods
-impl<H: HyperCraftHal, C: ConnectionExt> VmxVcpu<H, C> {
+impl<H: HyperCraftHal, G: GuestPageTableTrait, C: ConnectionExt> VmxVcpu<H, G, C> {
     fn setup_msr_bitmap(&mut self) -> HyperResult {
         // Intercept IA32_APIC_BASE MSR accesses
         let msr = x86::msr::IA32_APIC_BASE;
@@ -161,7 +163,7 @@ impl<H: HyperCraftHal, C: ConnectionExt> VmxVcpu<H, C> {
         Ok(())
     }
 
-    fn setup_vmcs(&mut self, entry: GuestPhysAddr, ept_root: HostPhysAddr) -> HyperResult {
+    fn setup_vmcs(&mut self, entry: GuestPhysAddr) -> HyperResult {
         let paddr = self.vmcs.phys_addr() as u64;
         unsafe {
             vmx::vmclear(paddr)?;
@@ -169,7 +171,7 @@ impl<H: HyperCraftHal, C: ConnectionExt> VmxVcpu<H, C> {
         }
         self.setup_vmcs_host()?;
         self.setup_vmcs_guest(entry)?;
-        self.setup_vmcs_control(ept_root)?;
+        self.setup_vmcs_control()?;
         Ok(())
     }
 
@@ -272,7 +274,7 @@ impl<H: HyperCraftHal, C: ConnectionExt> VmxVcpu<H, C> {
         Ok(())
     }
 
-    fn setup_vmcs_control(&mut self, ept_root: HostPhysAddr) -> HyperResult {
+    fn setup_vmcs_control(&mut self) -> HyperResult {
         // Intercept NMI and external interrupts.
         use super::vmcs::controls::*;
         use PinbasedControls as PinCtrl;
@@ -336,7 +338,7 @@ impl<H: HyperCraftHal, C: ConnectionExt> VmxVcpu<H, C> {
             0,
         )?;
 
-        vmcs::set_ept_pointer(ept_root)?;
+        vmcs::set_ept_pointer(self.ept.root_paddr())?;
 
         // No MSR switches if hypervisor doesn't use and there is only one vCPU.
         VmcsControl32::VMEXIT_MSR_STORE_COUNT.write(0)?;
@@ -444,7 +446,7 @@ impl<H: HyperCraftHal, C: ConnectionExt> VmxVcpu<H, C> {
     }
 }
 
-impl<H: HyperCraftHal, C: ConnectionExt> Drop for VmxVcpu<H, C> {
+impl<H: HyperCraftHal, G: GuestPageTableTrait, C: ConnectionExt> Drop for VmxVcpu<H, G, C> {
     fn drop(&mut self) {
         unsafe { vmx::vmclear(self.vmcs.phys_addr() as u64).unwrap() };
         info!("[HV] dropped VmxVcpu(vmcs: {:#x})", self.vmcs.phys_addr());
@@ -467,7 +469,7 @@ fn get_tr_base(tr: SegmentSelector, gdt: &DescriptorTablePointer<u64>) -> u64 {
     }
 }
 
-impl<H: HyperCraftHal, C: ConnectionExt> Debug for VmxVcpu<H, C> {
+impl<H: HyperCraftHal, G: GuestPageTableTrait, C: ConnectionExt> Debug for VmxVcpu<H, G, C> {
     fn fmt(&self, f: &mut Formatter) -> Result {
         (|| -> HyperResult<Result> {
             Ok(f.debug_struct("VmxVcpu")

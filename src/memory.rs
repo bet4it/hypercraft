@@ -56,4 +56,7 @@ pub trait GuestPageTableTrait {
 
     /// Write data to guest physical address
     fn write_guest_phys_addrs(&mut self, paddr: GuestPhysAddr, buf: &[u8]) -> HyperResult<usize>;
+
+    /// Get root physical address
+    fn root_paddr(&self) -> HostPhysAddr;
 }
