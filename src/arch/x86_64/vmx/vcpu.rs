@@ -127,6 +127,19 @@ impl<H: HyperCraftHal, G: GuestPageTableTrait, C: ConnectionExt> VmxVcpu<H, G, C
         self.pending_events.push_back((vector, err_code));
     }
 
+    /// If enable, a VM exit occurs at the beginning of next instruction.
+    pub fn set_monitor_trap_flag(&mut self, enable: bool) -> HyperResult {
+        let mut ctrl = VmcsControl32::PRIMARY_PROCBASED_EXEC_CONTROLS.read()?;
+        let bits = vmcs::controls::PrimaryControls::MONITOR_TRAP_FLAG.bits();
+        if enable {
+            ctrl |= bits
+        } else {
+            ctrl &= !bits
+        }
+        VmcsControl32::PRIMARY_PROCBASED_EXEC_CONTROLS.write(ctrl)?;
+        Ok(())
+    }
+
     /// If enable, a VM exit occurs at the beginning of any instruction if
     /// `RFLAGS.IF` = 1 and there are no other blocking of interrupts.
     /// (see SDM, Vol. 3C, Section 24.4.2)
@@ -413,6 +426,12 @@ impl<H: HyperCraftHal, G: GuestPageTableTrait, C: ConnectionExt> VmxVcpu<H, G, C
         Ok(())
     }
 
+    fn handle_monitor_trap_flag(&mut self) -> HyperResult {
+        self.set_monitor_trap_flag(false)?;
+        self.gdbserver_report();
+        Ok(())
+    }
+
     fn vmexit_handler(&mut self) {
         let exit_info = self.exit_info().unwrap();
 
@@ -428,6 +447,7 @@ impl<H: HyperCraftHal, G: GuestPageTableTrait, C: ConnectionExt> VmxVcpu<H, G, C
         // them handle all vmexits, but it's not very pragmatic now.
         let result: HyperResult = match exit_info.exit_reason {
             VmxExitReason::INTERRUPT_WINDOW => self.set_interrupt_window(false),
+            VmxExitReason::MONITOR_TRAP_FLAG => self.handle_monitor_trap_flag(),
             _ => H::vmexit_handler(self),
         };
 

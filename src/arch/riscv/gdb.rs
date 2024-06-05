@@ -47,10 +47,7 @@ where
                             panic!("Shouldn't be here");
                         }
                     }
-                    GdbStubStateMachine::Running(_) => {
-                        debug!("Enter GdbStubStateMachine::Running");
-                        break;
-                    }
+                    GdbStubStateMachine::Running(_) => break,
                     GdbStubStateMachine::CtrlCInterrupt(_) => {
                         debug!("Enter GdbStubStateMachine::CtrlCInterrupt");
                         break;
@@ -132,7 +129,9 @@ where
     }
 
     fn read_addrs(&mut self, start_addr: u64, data: &mut [u8]) -> TargetResult<usize, Self> {
-        self.gpt.read_guest_phys_addrs(start_addr as usize, data).map_err(|_| TargetError::Errno(1))
+        self.gpt
+            .read_guest_phys_addrs(start_addr as usize, data)
+            .map_err(|_| TargetError::Errno(1))
     }
 
     fn write_addrs(&mut self, start_addr: u64, data: &[u8]) -> TargetResult<(), Self> {
