@@ -5,6 +5,7 @@ use core::{arch::asm, mem::size_of};
 use bit_field::BitField;
 use x86::bits64::vmx;
 use x86::dtables::{self, DescriptorTablePointer};
+use x86::irq::BREAKPOINT_VECTOR;
 use x86::segmentation::SegmentSelector;
 use x86_64::registers::control::{Cr0, Cr0Flags, Cr3, Cr4, Cr4Flags};
 
@@ -359,7 +360,7 @@ impl<H: HyperCraftHal, G: GuestPageTableTrait, C: ConnectionExt> VmxVcpu<H, G, C
         VmcsControl32::VMENTRY_MSR_LOAD_COUNT.write(0)?;
 
         // Pass-through exceptions, don't use I/O bitmap, set MSR bitmaps.
-        VmcsControl32::EXCEPTION_BITMAP.write(0)?;
+        VmcsControl32::EXCEPTION_BITMAP.write(1 << BREAKPOINT_VECTOR)?;
         VmcsControl64::IO_BITMAP_A_ADDR.write(0)?;
         VmcsControl64::IO_BITMAP_B_ADDR.write(0)?;
         VmcsControl64::MSR_BITMAPS_ADDR.write(self.msr_bitmap.phys_addr() as _)?;
@@ -448,6 +449,10 @@ impl<H: HyperCraftHal, G: GuestPageTableTrait, C: ConnectionExt> VmxVcpu<H, G, C
         let result: HyperResult = match exit_info.exit_reason {
             VmxExitReason::INTERRUPT_WINDOW => self.set_interrupt_window(false),
             VmxExitReason::MONITOR_TRAP_FLAG => self.handle_monitor_trap_flag(),
+            VmxExitReason::EXCEPTION_NMI => {
+                self.gdbserver_report();
+                Ok(())
+            }
             _ => H::vmexit_handler(self),
         };
 
