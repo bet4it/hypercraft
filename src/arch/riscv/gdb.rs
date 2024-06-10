@@ -10,7 +10,7 @@ use gdbstub::{
                 singlethread::{SingleThreadBase, SingleThreadResume, SingleThreadResumeOps},
                 BaseOps,
             },
-            breakpoints::{Breakpoints, SwBreakpoint, WatchKind},
+            breakpoints::{Breakpoints, BreakpointsOps, SwBreakpoint, SwBreakpointOps, WatchKind},
         },
         Target, TargetError, TargetResult,
     },
@@ -90,7 +90,7 @@ where
     G: GuestPageTableTrait,
     C: ConnectionExt,
 {
-    fn get_page(&mut self, addr: u64) -> PagingResult<(PhysAddr, MappingFlags, PageSize)> {
+    fn get_page(&mut self, addr: usize) -> PagingResult<(PhysAddr, MappingFlags, PageSize)> {
         let vcpu = self.get_current_vcpu();
         let root_paddr = vcpu.get_page_table_root();
         let mut paging = PagingIfCallback::new();
@@ -116,8 +116,9 @@ where
         BaseOps::SingleThread(self)
     }
 
-    fn guard_rail_implicit_sw_breakpoints(&self) -> bool {
-        true
+    #[inline(always)]
+    fn support_breakpoints(&mut self) -> Option<BreakpointsOps<Self>> {
+        Some(self)
     }
 }
 
@@ -154,9 +155,7 @@ where
         let vcpu = self.get_current_vcpu();
         let (mut addr, buf, mut count) = (start_addr as usize, data.as_mut_ptr(), data.len());
         if vcpu.get_page_table_root() != 0 {
-            let (paddr, _, size) = self
-                .get_page(start_addr)
-                .map_err(|_| TargetError::Errno(1))?;
+            let (paddr, _, size) = self.get_page(addr).map_err(|_| TargetError::Errno(1))?;
             addr = paddr.as_usize();
             count = count.min(size as usize);
         }
@@ -169,9 +168,7 @@ where
         let vcpu = self.get_current_vcpu();
         let (mut addr, buf, mut count) = (start_addr as usize, data.as_ptr(), data.len());
         if vcpu.get_page_table_root() != 0 {
-            let (paddr, _, size) = self
-                .get_page(start_addr)
-                .map_err(|_| TargetError::Errno(1))?;
+            let (paddr, _, size) = self.get_page(addr).map_err(|_| TargetError::Errno(1))?;
             addr = paddr.as_usize();
             count = count.min(size as usize);
         }
@@ -194,5 +191,65 @@ where
 {
     fn resume(&mut self, _signal: Option<Signal>) -> Result<(), Self::Error> {
         Ok(())
+    }
+}
+
+impl<H, G, C> Breakpoints for VM<H, G, C>
+where
+    H: HyperCraftHal,
+    G: GuestPageTableTrait,
+    C: ConnectionExt,
+{
+    #[inline(always)]
+    fn support_sw_breakpoint(&mut self) -> Option<SwBreakpointOps<Self>> {
+        Some(self)
+    }
+}
+
+impl<H, G, C> SwBreakpoint for VM<H, G, C>
+where
+    H: HyperCraftHal,
+    G: GuestPageTableTrait,
+    C: ConnectionExt,
+{
+    fn add_sw_breakpoint(&mut self, bp_addr: u64, _kind: usize) -> TargetResult<bool, Self> {
+        let vcpu = self.get_current_vcpu();
+        let mut addr = bp_addr as usize;
+        if vcpu.get_page_table_root() != 0 {
+            match self.get_page(addr) {
+                Ok((paddr, _, _)) => addr = paddr.as_usize(),
+                Err(_) => return Ok(false),
+            }
+        }
+        let mut inst = [0; 2];
+        let ebreak = [2, 144];
+        if self
+            .gpt
+            .read_guest_phys_addrs(addr, inst.as_mut_ptr(), inst.len())
+            .is_err()
+        {
+            return Ok(false);
+        }
+        if self
+            .gpt
+            .write_guest_phys_addrs(addr, ebreak.as_ptr(), ebreak.len())
+            .is_err()
+        {
+            return Ok(false);
+        }
+        self.breakpoints.insert(bp_addr as usize, (addr, inst));
+        Ok(true)
+    }
+
+    fn remove_sw_breakpoint(&mut self, bp_addr: u64, _kind: usize) -> TargetResult<bool, Self> {
+        match self.breakpoints.remove(&(bp_addr as usize)) {
+            Some((addr, inst)) => {
+                self.gpt
+                    .write_guest_phys_addrs(addr, inst.as_ptr(), inst.len())
+                    .map_err(|_| TargetError::Errno(1))?;
+                Ok(true)
+            }
+            None => Ok(false),
+        }
     }
 }

@@ -1,4 +1,4 @@
-use alloc::collections::VecDeque;
+use alloc::collections::{BTreeMap, VecDeque};
 use core::fmt::{Debug, Formatter, Result};
 use core::{arch::asm, mem::size_of};
 
@@ -34,6 +34,7 @@ pub struct VmxVcpu<H: HyperCraftHal, G: GuestPageTableTrait, C: ConnectionExt> {
     pending_events: VecDeque<(u8, Option<u32>)>,
     pub(crate) ept: G,
     pub(crate) gdbstub: Option<GdbStubStateMachine<'static, Self, C>>,
+    pub(crate) breakpoints: BTreeMap<usize, (usize, [u8; 1])>,
 }
 
 impl<H: HyperCraftHal, G: GuestPageTableTrait, C: ConnectionExt> VmxVcpu<H, G, C> {
@@ -51,6 +52,7 @@ impl<H: HyperCraftHal, G: GuestPageTableTrait, C: ConnectionExt> VmxVcpu<H, G, C
             pending_events: VecDeque::with_capacity(8),
             ept,
             gdbstub: None,
+            breakpoints: BTreeMap::new(),
         };
         vcpu.setup_msr_bitmap()?;
         vcpu.setup_vmcs(entry)?;

@@ -14,6 +14,7 @@ use crate::{
     arch::sbi::SBI_ERR_NOT_SUPPORTED, vcpus::VM_CPUS_MAX, GprIndex, GuestPageTableTrait,
     GuestPhysAddr, GuestVirtAddr, HyperCraftHal, HyperError, HyperResult, VCpu, VmCpus, VmExitInfo,
 };
+use alloc::collections::BTreeMap;
 use gdbstub::{conn::ConnectionExt, stub::state_machine::GdbStubStateMachine};
 use riscv_decode::Instruction;
 use sbi_rt::{pmu_counter_get_info, pmu_counter_stop};
@@ -25,6 +26,7 @@ pub struct VM<H: HyperCraftHal, G: GuestPageTableTrait, C: ConnectionExt> {
     pub(crate) vm_pages: VmPages,
     plic: PlicState,
     pub(crate) gdbstub: Option<GdbStubStateMachine<'static, Self, C>>,
+    pub(crate) breakpoints: BTreeMap<usize, (usize, [u8; 2])>,
 }
 
 impl<H: HyperCraftHal, G: GuestPageTableTrait, C: ConnectionExt> VM<H, G, C> {
@@ -36,6 +38,7 @@ impl<H: HyperCraftHal, G: GuestPageTableTrait, C: ConnectionExt> VM<H, G, C> {
             vm_pages: VmPages::default(),
             plic: PlicState::new(H::phys_to_virt(0xC00_0000)),
             gdbstub: None,
+            breakpoints: BTreeMap::new(),
         })
     }
 

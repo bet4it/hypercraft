@@ -6,12 +6,15 @@ use gdbstub::{
     conn::ConnectionExt,
     stub::{state_machine::GdbStubStateMachine, GdbStub, SingleThreadStopReason},
     target::{
-        ext::base::{
-            singlethread::{
-                SingleThreadBase, SingleThreadResume, SingleThreadResumeOps,
-                SingleThreadSingleStep, SingleThreadSingleStepOps,
+        ext::{
+            base::{
+                singlethread::{
+                    SingleThreadBase, SingleThreadResume, SingleThreadResumeOps,
+                    SingleThreadSingleStep, SingleThreadSingleStepOps,
+                },
+                BaseOps,
             },
-            BaseOps,
+            breakpoints::{Breakpoints, BreakpointsOps, SwBreakpoint, SwBreakpointOps},
         },
         Target, TargetError, TargetResult,
     },
@@ -92,7 +95,7 @@ where
     G: GuestPageTableTrait,
     C: ConnectionExt,
 {
-    fn get_page(&self, addr: u64) -> PagingResult<(PhysAddr, MappingFlags, PageSize)> {
+    fn get_page(&self, addr: usize) -> PagingResult<(PhysAddr, MappingFlags, PageSize)> {
         let mut paging = PagingIfCallback::new();
         paging.set_callback(|guest_addr| {
             let host_addr = self.ept.translate(guest_addr.into()).unwrap();
@@ -116,8 +119,9 @@ where
         BaseOps::SingleThread(self)
     }
 
-    fn guard_rail_implicit_sw_breakpoints(&self) -> bool {
-        true
+    #[inline(always)]
+    fn support_breakpoints(&mut self) -> Option<BreakpointsOps<Self>> {
+        Some(self)
     }
 }
 
@@ -177,9 +181,7 @@ where
         let (mut addr, buf, mut count) = (start_addr as usize, data.as_mut_ptr(), data.len());
         let cr0 = Cr0Flags::from_bits_truncate(self.cr0() as u64);
         if cr0.contains(Cr0Flags::PAGING) {
-            let (paddr, _, size) = self
-                .get_page(start_addr)
-                .map_err(|_| TargetError::Errno(1))?;
+            let (paddr, _, size) = self.get_page(addr).map_err(|_| TargetError::Errno(1))?;
             addr = paddr.as_usize();
             count = count.min(size as usize);
         }
@@ -192,9 +194,7 @@ where
         let (mut addr, buf, mut count) = (start_addr as usize, data.as_ptr(), data.len());
         let cr0 = Cr0Flags::from_bits_truncate(self.cr0() as u64);
         if cr0.contains(Cr0Flags::PAGING) {
-            let (paddr, _, size) = self
-                .get_page(start_addr)
-                .map_err(|_| TargetError::Errno(1))?;
+            let (paddr, _, size) = self.get_page(addr).map_err(|_| TargetError::Errno(1))?;
             addr = paddr.as_usize();
             count = count.min(size as usize);
         }
@@ -233,5 +233,65 @@ where
 {
     fn step(&mut self, _signal: Option<Signal>) -> Result<(), Self::Error> {
         self.set_monitor_trap_flag(true)
+    }
+}
+
+impl<H, G, C> Breakpoints for VCpu<H, G, C>
+where
+    H: HyperCraftHal,
+    G: GuestPageTableTrait,
+    C: ConnectionExt,
+{
+    #[inline(always)]
+    fn support_sw_breakpoint(&mut self) -> Option<SwBreakpointOps<Self>> {
+        Some(self)
+    }
+}
+
+impl<H, G, C> SwBreakpoint for VCpu<H, G, C>
+where
+    H: HyperCraftHal,
+    G: GuestPageTableTrait,
+    C: ConnectionExt,
+{
+    fn add_sw_breakpoint(&mut self, bp_addr: u64, _kind: usize) -> TargetResult<bool, Self> {
+        let mut addr = bp_addr as usize;
+        let cr0 = Cr0Flags::from_bits_truncate(self.cr0() as u64);
+        if cr0.contains(Cr0Flags::PAGING) {
+            match self.get_page(self.cr3()) {
+                Ok((paddr, _, _)) => addr = paddr.as_usize(),
+                Err(_) => return Ok(false),
+            }
+        }
+        let mut inst = [0; 1];
+        let int3 = [0xcc];
+        if self
+            .ept
+            .read_guest_phys_addrs(addr, inst.as_mut_ptr(), inst.len())
+            .is_err()
+        {
+            return Ok(false);
+        }
+        if self
+            .ept
+            .write_guest_phys_addrs(addr, int3.as_ptr(), int3.len())
+            .is_err()
+        {
+            return Ok(false);
+        }
+        self.breakpoints.insert(bp_addr as usize, (addr, inst));
+        Ok(true)
+    }
+
+    fn remove_sw_breakpoint(&mut self, bp_addr: u64, _kind: usize) -> TargetResult<bool, Self> {
+        match self.breakpoints.remove(&(bp_addr as usize)) {
+            Some((addr, inst)) => {
+                self.ept
+                    .write_guest_phys_addrs(addr, inst.as_ptr(), inst.len())
+                    .map_err(|_| TargetError::Errno(1))?;
+                Ok(true)
+            }
+            None => Ok(false),
+        }
     }
 }
