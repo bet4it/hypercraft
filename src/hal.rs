@@ -32,10 +32,8 @@ pub trait HyperCraftHal: Sized {
     // fn vmexit_handler(vcpu: &mut crate::VCpu<Self>, vm_exit_info: VmExitInfo);
 
     /// Convert a host physical address to host virtual address.
-    #[cfg(target_arch = "x86_64")]
     fn phys_to_virt(pa: HostPhysAddr) -> HostVirtAddr;
     /// Convert a host virtual address to host physical address.
-    #[cfg(target_arch = "x86_64")]
     fn virt_to_phys(va: HostVirtAddr) -> HostPhysAddr;
     /// VM-Exit handler.
     #[cfg(target_arch = "x86_64")]

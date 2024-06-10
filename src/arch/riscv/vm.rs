@@ -34,7 +34,7 @@ impl<H: HyperCraftHal, G: GuestPageTableTrait, C: ConnectionExt> VM<H, G, C> {
             vcpus,
             gpt,
             vm_pages: VmPages::default(),
-            plic: PlicState::new(0xC00_0000 + 0xffff_ffc0_0000_0000),
+            plic: PlicState::new(H::phys_to_virt(0xC00_0000)),
             gdbstub: None,
         })
     }
@@ -165,10 +165,10 @@ impl<H: HyperCraftHal, G: GuestPageTableTrait, C: ConnectionExt> VM<H, G, C> {
         gprs: &mut GeneralPurposeRegisters,
     ) -> HyperResult<usize> {
         //  plic
-        if fault_addr >= self.plic.base() - 0xffff_ffc0_0000_0000
-            && fault_addr < self.plic.base() + 0x0400_0000 - 0xffff_ffc0_0000_0000
+        if fault_addr >= H::virt_to_phys(self.plic.base())
+            && fault_addr < H::virt_to_phys(self.plic.base() + 0x0400_0000)
         {
-            self.handle_plic(inst_addr, inst, fault_addr + 0xffff_ffc0_0000_0000, gprs)
+            self.handle_plic(inst_addr, inst, H::phys_to_virt(fault_addr), gprs)
         } else {
             error!("inst_addr: {:#x}, fault_addr: {:#x}", inst_addr, fault_addr);
             Err(HyperError::PageFault)

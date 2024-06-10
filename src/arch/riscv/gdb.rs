@@ -16,6 +16,10 @@ use gdbstub::{
     },
 };
 use gdbstub_arch::riscv::reg::RiscvCoreRegs;
+use memory_addr::PhysAddr;
+use page_table::{
+    riscv::Sv39PageTable, MappingFlags, PageSize, PagingIf, PagingIfCallback, PagingResult,
+};
 
 impl<H, G, C> VM<H, G, C>
 where
@@ -80,6 +84,24 @@ where
     }
 }
 
+impl<H, G, C> VM<H, G, C>
+where
+    H: HyperCraftHal,
+    G: GuestPageTableTrait,
+    C: ConnectionExt,
+{
+    fn get_page(&mut self, addr: u64) -> PagingResult<(PhysAddr, MappingFlags, PageSize)> {
+        let vcpu = self.get_current_vcpu();
+        let root_paddr = vcpu.get_page_table_root();
+        let mut paging = PagingIfCallback::new();
+        paging.set_callback(|guest_addr| {
+            let host_addr = self.gpt.translate(guest_addr.into()).unwrap();
+            H::phys_to_virt(host_addr).into()
+        });
+        Sv39PageTable::create_from(root_paddr.into(), paging).query((addr as usize).into())
+    }
+}
+
 impl<H, G, C> Target for VM<H, G, C>
 where
     H: HyperCraftHal,
@@ -129,16 +151,33 @@ where
     }
 
     fn read_addrs(&mut self, start_addr: u64, data: &mut [u8]) -> TargetResult<usize, Self> {
+        let vcpu = self.get_current_vcpu();
+        let (mut addr, buf, mut count) = (start_addr as usize, data.as_mut_ptr(), data.len());
+        if vcpu.get_page_table_root() != 0 {
+            let (paddr, _, size) = self
+                .get_page(start_addr)
+                .map_err(|_| TargetError::Errno(1))?;
+            addr = paddr.as_usize();
+            count = count.min(size as usize);
+        }
         self.gpt
-            .read_guest_phys_addrs(start_addr as usize, data)
+            .read_guest_phys_addrs(addr, buf, count)
             .map_err(|_| TargetError::Errno(1))
     }
 
     fn write_addrs(&mut self, start_addr: u64, data: &[u8]) -> TargetResult<(), Self> {
-        match self.gpt.write_guest_phys_addrs(start_addr as usize, data) {
-            Ok(_) => Ok(()),
-            Err(_) => Err(TargetError::Errno(1)),
+        let vcpu = self.get_current_vcpu();
+        let (mut addr, buf, mut count) = (start_addr as usize, data.as_ptr(), data.len());
+        if vcpu.get_page_table_root() != 0 {
+            let (paddr, _, size) = self
+                .get_page(start_addr)
+                .map_err(|_| TargetError::Errno(1))?;
+            addr = paddr.as_usize();
+            count = count.min(size as usize);
         }
+        self.gpt
+            .write_guest_phys_addrs(addr, buf, count)
+            .map_err(|_| TargetError::Errno(1))
     }
 
     #[inline(always)]

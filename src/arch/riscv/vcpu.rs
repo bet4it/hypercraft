@@ -6,7 +6,7 @@ use memoffset::offset_of;
 use tock_registers::LocalRegisterCopy;
 
 // use alloc::sync::Arc;
-use riscv::register::{htinst, htval, hvip, scause, sstatus, stval};
+use riscv::register::{htinst, htval, hvip, scause, sstatus, stval, vsatp};
 
 use crate::arch::vmexit::PrivilegeLevel;
 use crate::arch::{traps, RiscvCsrTrait, CSR};
@@ -99,6 +99,9 @@ pub struct VmCpuRegisters {
 
     // Read on VM exit.
     trap_csrs: VmCpuTrapState,
+
+    // Page table root
+    page_table_root: usize,
 }
 
 #[allow(dead_code)]
@@ -304,6 +307,8 @@ impl<H: HyperCraftHal> VCpu<H> {
         regs.trap_csrs.htval = htval::read();
         regs.trap_csrs.htinst = htinst::read();
 
+        regs.page_table_root = vsatp::read().ppn() << 12;
+
         let scause = scause::read();
         use scause::{Exception, Interrupt, Trap};
         match scause.cause() {
@@ -374,6 +379,11 @@ impl<H: HyperCraftHal> VCpu<H> {
     /// Advance guest pc by `instr_len` bytes
     pub fn advance_pc(&mut self, instr_len: usize) {
         self.regs.guest_regs.sepc += instr_len
+    }
+
+    /// Get page table root
+    pub fn get_page_table_root(&mut self) -> usize {
+        self.regs.page_table_root
     }
 
     /// Gets the vCPU's id.
