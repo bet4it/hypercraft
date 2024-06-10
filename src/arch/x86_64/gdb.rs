@@ -1,4 +1,6 @@
-use crate::{GprIndex, GuestPageTableTrait, HyperCraftHal, HyperError as Error, VCpu};
+use crate::{
+    GprIndex, GuestPageTableTrait, HyperCraftHal, HyperError as Error, NestedPageTable, VCpu,
+};
 use gdbstub::{
     common::Signal,
     conn::ConnectionExt,
@@ -15,6 +17,11 @@ use gdbstub::{
     },
 };
 use gdbstub_arch::x86::reg::X86_64CoreRegs;
+use memory_addr::PhysAddr;
+use page_table::{
+    x86_64::X64PageTable, MappingFlags, PageSize, PagingIf, PagingIfCallback, PagingResult,
+};
+use x86_64::registers::control::Cr0Flags;
 
 impl<H, G, C> VCpu<H, G, C>
 where
@@ -61,8 +68,7 @@ where
         }
     }
 
-    /// Gdbserver report stop reason
-    pub fn gdbserver_report(&mut self) {
+    pub(crate) fn gdbserver_report(&mut self) {
         let mut gdb = self.gdbstub.take().unwrap();
         let reason = SingleThreadStopReason::DoneStep;
 
@@ -77,6 +83,22 @@ where
         }
         self.gdbstub = Some(gdb);
         self.gdbserver_loop();
+    }
+}
+
+impl<H, G, C> VCpu<H, G, C>
+where
+    H: HyperCraftHal,
+    G: GuestPageTableTrait,
+    C: ConnectionExt,
+{
+    fn get_page(&self, addr: u64) -> PagingResult<(PhysAddr, MappingFlags, PageSize)> {
+        let mut paging = PagingIfCallback::new();
+        paging.set_callback(|guest_addr| {
+            let host_addr = self.ept.translate(guest_addr.into()).unwrap();
+            H::phys_to_virt(host_addr).into()
+        });
+        X64PageTable::create_from(self.cr3().into(), paging).query((addr as usize).into())
     }
 }
 
@@ -152,16 +174,33 @@ where
     }
 
     fn read_addrs(&mut self, start_addr: u64, data: &mut [u8]) -> TargetResult<usize, Self> {
+        let (mut addr, buf, mut count) = (start_addr as usize, data.as_mut_ptr(), data.len());
+        let cr0 = Cr0Flags::from_bits_truncate(self.cr0() as u64);
+        if cr0.contains(Cr0Flags::PAGING) {
+            let (paddr, _, size) = self
+                .get_page(start_addr)
+                .map_err(|_| TargetError::Errno(1))?;
+            addr = paddr.as_usize();
+            count = count.min(size as usize);
+        }
         self.ept
-            .read_guest_phys_addrs(start_addr as usize, data)
+            .read_guest_phys_addrs(addr, buf, count)
             .map_err(|_| TargetError::Errno(1))
     }
 
     fn write_addrs(&mut self, start_addr: u64, data: &[u8]) -> TargetResult<(), Self> {
-        match self.ept.write_guest_phys_addrs(start_addr as usize, data) {
-            Ok(_) => Ok(()),
-            Err(_) => Err(TargetError::Errno(1)),
+        let (mut addr, buf, mut count) = (start_addr as usize, data.as_ptr(), data.len());
+        let cr0 = Cr0Flags::from_bits_truncate(self.cr0() as u64);
+        if cr0.contains(Cr0Flags::PAGING) {
+            let (paddr, _, size) = self
+                .get_page(start_addr)
+                .map_err(|_| TargetError::Errno(1))?;
+            addr = paddr.as_usize();
+            count = count.min(size as usize);
         }
+        self.ept
+            .write_guest_phys_addrs(addr, buf, count)
+            .map_err(|_| TargetError::Errno(1))
     }
 
     #[inline(always)]

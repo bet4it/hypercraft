@@ -9,15 +9,15 @@ use x86::irq::BREAKPOINT_VECTOR;
 use x86::segmentation::SegmentSelector;
 use x86_64::registers::control::{Cr0, Cr0Flags, Cr3, Cr4, Cr4Flags};
 
+use super::definitions::VmxExitReason;
 use super::region::{MsrBitmap, VmxRegion};
 use super::vmcs::{
     self, VmcsControl32, VmcsControl64, VmcsControlNW, VmcsGuest16, VmcsGuest32, VmcsGuest64,
     VmcsGuestNW, VmcsHost16, VmcsHost32, VmcsHost64, VmcsHostNW,
 };
 use super::VmxPerCpuState;
-use super::definitions::VmxExitReason;
-use crate::arch::{msr::Msr, memory::NestedPageFaultInfo, regs::GeneralRegisters};
 use crate::arch::lapic::ApicTimer;
+use crate::arch::{memory::NestedPageFaultInfo, msr::Msr, regs::GeneralRegisters};
 use crate::{GuestPageTableTrait, GuestPhysAddr, HostPhysAddr, HyperCraftHal, HyperResult};
 
 use gdbstub::conn::ConnectionExt;
@@ -120,6 +120,16 @@ impl<H: HyperCraftHal, G: GuestPageTableTrait, C: ConnectionExt> VmxVcpu<H, G, C
     /// Advance guest `RIP` by `instr_len` bytes.
     pub fn advance_rip(&mut self, instr_len: u8) -> HyperResult {
         Ok(VmcsGuestNW::RIP.write(VmcsGuestNW::RIP.read()? + instr_len as usize)?)
+    }
+
+    /// Guest `CR0`
+    pub fn cr0(&self) -> usize {
+        VmcsGuestNW::CR0.read().unwrap()
+    }
+
+    /// Guest `CR3`
+    pub fn cr3(&self) -> usize {
+        VmcsGuestNW::CR3.read().unwrap()
     }
 
     /// Add a virtual interrupt or exception to the pending events list,
