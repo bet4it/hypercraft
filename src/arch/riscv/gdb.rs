@@ -156,8 +156,9 @@ where
         let (mut addr, buf, mut count) = (start_addr as usize, data.as_mut_ptr(), data.len());
         if vcpu.get_page_table_root() != 0 {
             let (paddr, _, size) = self.get_page(addr).map_err(|_| TargetError::Errno(1))?;
+            let size = size as usize;
             addr = paddr.as_usize();
-            count = count.min(size as usize);
+            count = count.min(size - addr % size);
         }
         self.gpt
             .read_guest_phys_addrs(addr, buf, count)
@@ -169,8 +170,9 @@ where
         let (mut addr, buf, mut count) = (start_addr as usize, data.as_ptr(), data.len());
         if vcpu.get_page_table_root() != 0 {
             let (paddr, _, size) = self.get_page(addr).map_err(|_| TargetError::Errno(1))?;
+            let size = size as usize;
             addr = paddr.as_usize();
-            count = count.min(size as usize);
+            count = count.min(size - addr % size);
         }
         self.gpt
             .write_guest_phys_addrs(addr, buf, count)

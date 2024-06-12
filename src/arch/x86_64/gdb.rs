@@ -182,8 +182,9 @@ where
         let cr0 = Cr0Flags::from_bits_truncate(self.cr0() as u64);
         if cr0.contains(Cr0Flags::PAGING) {
             let (paddr, _, size) = self.get_page(addr).map_err(|_| TargetError::Errno(1))?;
+            let size = size as usize;
             addr = paddr.as_usize();
-            count = count.min(size as usize);
+            count = count.min(size - addr % size);
         }
         self.ept
             .read_guest_phys_addrs(addr, buf, count)
@@ -195,8 +196,9 @@ where
         let cr0 = Cr0Flags::from_bits_truncate(self.cr0() as u64);
         if cr0.contains(Cr0Flags::PAGING) {
             let (paddr, _, size) = self.get_page(addr).map_err(|_| TargetError::Errno(1))?;
+            let size = size as usize;
             addr = paddr.as_usize();
-            count = count.min(size as usize);
+            count = count.min(size - addr % size);
         }
         self.ept
             .write_guest_phys_addrs(addr, buf, count)
